@@ -1,0 +1,6 @@
+/target
+/secrets
+**/*.rs.bk
+*.pdb
+.env
+*.sock
