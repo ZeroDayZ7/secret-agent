@@ -7,7 +7,6 @@ services:
     networks:
       - citizen-app-net
     environment:
-      # Odwołujemy się bezpośrednio do nazwy kontenera/usługi w KMS:
       - SECRET_AGENT_KMS_URL=http://kms-service:8080
       - SECRET_AGENT_CLIENT_ID=citizen-docs-service
       - SECRET_AGENT_SOCKET_PATH=/var/run/agent-sockets/agent.sock
@@ -28,5 +27,5 @@ volumes:
 
 networks:
   citizen-app-net:
-    name: obywatel_app__network # <--- Łączymy z istniejącą siecią
+    name: obywatel_app__network
     external: true
