@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
@@ -43,7 +41,7 @@ pub struct KmsClient {
 impl KmsClient {
     pub fn new(config: &AgentConfig) -> Result<Self, KmsError> {
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
+            .timeout(config.kms_timeout())
             .build()?;
 
         Ok(Self {

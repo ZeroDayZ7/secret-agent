@@ -32,6 +32,12 @@ impl SecretCache {
         })
     }
 
+    pub fn purge_expired(&self) {
+        let mut guard = self.inner.write().expect("cache lock poisoned");
+        let now = Instant::now();
+        guard.retain(|_, entry| entry.expires_at > now);
+    }
+
     pub fn insert(&self, key: String, value: SecretString, ttl: Duration) {
         let mut guard = self.inner.write().expect("cache lock poisoned");
         guard.insert(

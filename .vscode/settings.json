@@ -33,10 +33,10 @@
     "**/README.md": true,
     "**/SECURITY.md": true,
     "**/combined.txt": true
-  },
+  }
 
   // === Formatowanie ===
-  "editor.formatOnSave": true
+  // "editor.formatOnSave": true
   // "[rust]": {
   //     "editor.defaultFormatter": "rust-lang.rust-analyzer"
   // },

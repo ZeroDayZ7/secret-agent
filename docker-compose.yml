@@ -13,6 +13,13 @@ services:
       - SECRET_AGENT_SOCKET_PATH=/var/run/agent-sockets/agent.sock
       - SECRET_AGENT_SA_TOKEN_PATH=/run/secrets/sa_token
       - RUST_LOG=info
+
+      # Opcjonalne nadpisanie czasów (w sekundach):
+      - SECRET_AGENT_KMS_TIMEOUT_SECS=10            # Timeout zapytań HTTP do KMS (sekundy)
+      - SECRET_AGENT_SOCKET_MODE=0o660              # Uprawnienia pliku socketu UDS
+      - SECRET_AGENT_DEFAULT_TTL_SECS=2700          # 45 minut
+      - SECRET_AGENT_RENEWAL_LOOKAHEAD_SECS=900     # 15 minut przed wygaśnięciem
+      - SECRET_AGENT_POLL_INTERVAL_SECS=15
     secrets:
       - sa_token
     volumes:

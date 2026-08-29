@@ -42,28 +42,37 @@ pub struct AgentConfig {
     #[arg(long, env = "SECRET_AGENT_CLIENT_ID")]
     pub client_id: String,
 
-    /// Domyślny TTL sekretów, gdy KMS go nie zwróci (w sekundach).
-    #[arg(long, env = "SECRET_AGENT_DEFAULT_TTL_SECS", default_value_t = 300)]
+    /// Timeout dla zapytania HTTP do KMS w sekundach (domyślnie 10 s).
+    #[arg(long, env = "SECRET_AGENT_KMS_TIMEOUT_SECS", default_value_t = 10)]
+    pub kms_timeout_secs: u64,
+
+    /// Domyślny TTL sekretów, gdy KMS go nie zwróci (2700 sekund = 45 minut).
+    #[arg(long, env = "SECRET_AGENT_DEFAULT_TTL_SECS", default_value_t = 2700)]
     pub default_ttl_secs: u64,
 
-    /// Interwał cyklicznego odpytywania cache (w sekundach).
+    /// Interwał cyklicznego sprawdzania cache (15 sekund).
     #[arg(long, env = "SECRET_AGENT_POLL_INTERVAL_SECS", default_value_t = 15)]
     pub poll_interval_secs: u64,
 
-    /// Okno czasowe przed wygaśnięciem sekretu kwalifikujące go do odnowienia (w sekundach).
+    /// Okno wyprzedzenia przed wygaśnięciem kwalifikujące sekret do odnowienia (900 sekund = 15 minut).
     #[arg(
         long,
         env = "SECRET_AGENT_RENEWAL_LOOKAHEAD_SECS",
-        default_value_t = 30
+        default_value_t = 900
     )]
     pub renewal_lookahead_secs: u64,
 
+    /// Minimalny odstęp między próbami ponowienia po błędzie (backoff bazowy, ms).
     #[arg(long, env = "SECRET_AGENT_BACKOFF_BASE_MS", default_value_t = 500)]
     pub backoff_base_ms: u64,
 
     /// Maksymalny odstęp backoffu (ms).
     #[arg(long, env = "SECRET_AGENT_BACKOFF_MAX_MS", default_value_t = 30_000)]
     pub backoff_max_ms: u64,
+
+    /// Uprawnienia dla pliku socketu UDS w formacie ósemkowym (domyślnie 0o660).
+    #[arg(long, env = "SECRET_AGENT_SOCKET_MODE", default_value_t = 0o660)]
+    pub socket_mode: u32,
 }
 
 impl AgentConfig {
@@ -77,6 +86,10 @@ impl AgentConfig {
 
     pub fn renewal_lookahead(&self) -> Duration {
         Duration::from_secs(self.renewal_lookahead_secs)
+    }
+
+    pub fn kms_timeout(&self) -> Duration {
+        Duration::from_secs(self.kms_timeout_secs)
     }
 
     pub fn secrets_full_url(&self) -> String {
