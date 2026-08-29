@@ -5,10 +5,10 @@ services:
       dockerfile: Dockerfile
     container_name: secret-agent
     networks:
-      - citizen-app-net
+      - sec-net
     environment:
       - SECRET_AGENT_KMS_URL=http://kms-service:8080
-      - SECRET_AGENT_CLIENT_ID=citizen-docs-service
+      - SECRET_AGENT_CLIENT_ID=auth-service
       - SECRET_AGENT_SOCKET_PATH=/var/run/agent-sockets/agent.sock
       - SECRET_AGENT_SA_TOKEN_PATH=/run/secrets/sa_token
       - RUST_LOG=info
@@ -19,13 +19,13 @@ services:
 
 secrets:
   sa_token:
-    file: ./secrets/mock_sa_token
+    file: ./secrets/.mock_sa_token
 
 volumes:
   socket-data:
-    name: secret_agent_sockets # <--- Kluczowe: nazwa jawna dla zewnętrznych repozytoriów
+    name: secret_agent_sockets
 
 networks:
-  citizen-app-net:
-    name: obywatel_app__network
+  sec-net:
+    name: kms_sec-net
     external: true
