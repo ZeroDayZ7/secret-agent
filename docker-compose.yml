@@ -10,8 +10,8 @@ services:
       - SECRET_AGENT_KMS_URL=http://kms-service:8080
       - SECRET_AGENT_KMS_SECRETS_PATH=/api/v1/agent/credentials/issue
       - SECRET_AGENT_CLIENT_ID=auth-service
+      - SECRET_AGENT_HMAC_KEY=super-long-random-secret-for-auth-service-hmac-64-bytes
       - SECRET_AGENT_SOCKET_PATH=/var/run/agent-sockets/agent.sock
-      - SECRET_AGENT_SA_TOKEN_PATH=/run/secrets/sa_token
       - RUST_LOG=info
 
       # Opcjonalne nadpisanie czasów (w sekundach):
@@ -20,14 +20,8 @@ services:
       - SECRET_AGENT_DEFAULT_TTL_SECS=2700          # 45 minut
       - SECRET_AGENT_RENEWAL_LOOKAHEAD_SECS=900     # 15 minut przed wygaśnięciem
       - SECRET_AGENT_POLL_INTERVAL_SECS=15
-    secrets:
-      - sa_token
     volumes:
       - socket-data:/var/run/agent-sockets
-
-secrets:
-  sa_token:
-    file: ./secrets/.mock_sa_token
 
 volumes:
   socket-data:

@@ -1,12 +1,16 @@
-use secrecy::{ExposeSecret, SecretString};
+use hmac::{Hmac, Mac};
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 
 use crate::config::AgentConfig;
 
+type HmacSha256 = Hmac<Sha256>;
+
 #[derive(thiserror::Error, Debug)]
 pub enum KmsError {
-    #[error("nie udało się odczytać tokenu ServiceAccount: {0}")]
-    ServiceAccountTokenRead(#[from] std::io::Error),
+    #[error("błąd obliczania HMAC: {0}")]
+    Hmac(String),
     #[error("błąd żądania HTTP do KMS: {0}")]
     Http(#[from] reqwest::Error),
     #[error("KMS zwrócił nieoczekiwany status: {0}")]
@@ -34,8 +38,8 @@ struct KmsSecretsResponse {
 pub struct KmsClient {
     http: reqwest::Client,
     secrets_url: String,
-    sa_token_path: std::path::PathBuf,
     client_id: String,
+    hmac_key: SecretString,
 }
 
 impl KmsClient {
@@ -47,29 +51,38 @@ impl KmsClient {
         Ok(Self {
             http,
             secrets_url: config.secrets_full_url(),
-            sa_token_path: config.sa_token_path.clone(),
             client_id: config.client_id.clone(),
+            hmac_key: SecretString::from(config.hmac_key.clone()),
         })
     }
 
-    async fn read_service_account_token(&self) -> Result<SecretString, KmsError> {
-        let raw = tokio::fs::read_to_string(&self.sa_token_path).await?;
-        Ok(SecretString::from(raw.trim().to_owned()))
+    /// Oblicza podpis HMAC-SHA256 dla przekazanej treść żądania (payloadu) lub identyfikatora.
+    fn compute_hmac(&self, data: &[u8]) -> Result<String, KmsError> {
+        use secrecy::ExposeSecret;
+        let mut mac = HmacSha256::new_from_slice(self.hmac_key.expose_secret().as_bytes())
+            .map_err(|e| KmsError::Hmac(e.to_string()))?;
+        mac.update(data);
+        let result = mac.finalize();
+        Ok(hex::encode(result.into_bytes()))
     }
 
     pub async fn fetch_secrets(&self) -> Result<Vec<SecretPayload>, KmsError> {
-        let sa_token = self.read_service_account_token().await?;
-
         let request_body = IssueCredentialsRequest {
             client_id: &self.client_id,
         };
 
-        // Wykonujemy żądanie POST pod /api/v1/agent/credentials/issue
+        // Serializujemy ciało żądania do JSON, aby użyć go jako bazy do wyliczenia HMAC
+        let body_bytes =
+            serde_json::to_vec(&request_body).map_err(|e| KmsError::Hmac(e.to_string()))?;
+
+        let signature = self.compute_hmac(&body_bytes)?;
+
         let response = self
             .http
             .post(&self.secrets_url)
-            .bearer_auth(sa_token.expose_secret())
-            .header("X-Client-Id", &self.client_id)
+            .header("X-Signature", signature)
+            .header("X-Service-ID", &self.client_id)
+            .header("X-Service-Name", &self.client_id)
             .json(&request_body)
             .send()
             .await?;

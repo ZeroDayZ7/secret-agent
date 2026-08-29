@@ -30,13 +30,9 @@ pub struct AgentConfig {
     )]
     pub kms_secrets_path: String,
 
-    /// Ścieżka do tokenu ServiceAccount montowanego przez Kubernetes.
-    #[arg(
-        long,
-        env = "SECRET_AGENT_SA_TOKEN_PATH",
-        default_value = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-    )]
-    pub sa_token_path: PathBuf,
+    /// Klucz HMAC używany do podpisywania żądań do KMS.
+    #[arg(long, env = "SECRET_AGENT_HMAC_KEY")]
+    pub hmac_key: String,
 
     /// Identyfikator poda/aplikacji używany przy autoryzacji w KMS.
     #[arg(long, env = "SECRET_AGENT_CLIENT_ID")]
