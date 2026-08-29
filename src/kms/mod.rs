@@ -38,6 +38,7 @@ struct KmsSecretsResponse {
 pub struct KmsClient {
     http: reqwest::Client,
     secrets_url: String,
+    secrets_path: String,
     client_id: String,
     hmac_key: SecretString,
 }
@@ -48,15 +49,22 @@ impl KmsClient {
             .timeout(config.kms_timeout())
             .build()?;
 
+        let path = if config.kms_secrets_path.starts_with('/') {
+            config.kms_secrets_path.clone()
+        } else {
+            format!("/{}", config.kms_secrets_path)
+        };
+
         Ok(Self {
             http,
             secrets_url: config.secrets_full_url(),
+            secrets_path: path,
             client_id: config.client_id.clone(),
             hmac_key: SecretString::from(config.hmac_key.clone()),
         })
     }
 
-    /// Oblicza podpis HMAC-SHA256 dla przekazanej treść żądania (payloadu) lub identyfikatora.
+    /// Oblicza podpis HMAC-SHA256 dla przekazanej treści.
     fn compute_hmac(&self, data: &[u8]) -> Result<String, KmsError> {
         use secrecy::ExposeSecret;
         let mut mac = HmacSha256::new_from_slice(self.hmac_key.expose_secret().as_bytes())
@@ -71,18 +79,24 @@ impl KmsClient {
             client_id: &self.client_id,
         };
 
-        // Serializujemy ciało żądania do JSON, aby użyć go jako bazy do wyliczenia HMAC
-        let body_bytes =
-            serde_json::to_vec(&request_body).map_err(|e| KmsError::Hmac(e.to_string()))?;
+        // 1. Najpierw generujemy timestamp
+        let timestamp = chrono::Utc::now().timestamp().to_string();
 
-        let signature = self.compute_hmac(&body_bytes)?;
+        // 2. Budujemy kanoniczny payload zgodny z KMS: method:path:timestamp
+        let method = "POST";
+        let canonical_payload = format!("{}:{}:{}", method, self.secrets_path, timestamp);
 
+        // 3. Liczymy podpis HMAC z przygotowanego ciągu
+        let signature = self.compute_hmac(canonical_payload.as_bytes())?;
+
+        // 4. Wysyłamy żądanie z kompletem wymaganych nagłówków
         let response = self
             .http
             .post(&self.secrets_url)
             .header("X-Signature", signature)
             .header("X-Service-ID", &self.client_id)
             .header("X-Service-Name", &self.client_id)
+            .header("X-Timestamp", timestamp)
             .json(&request_body)
             .send()
             .await?;
