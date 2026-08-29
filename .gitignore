@@ -1,5 +1,6 @@
 /target
 /secrets
+/combined.txt
 **/*.rs.bk
 *.pdb
 .env

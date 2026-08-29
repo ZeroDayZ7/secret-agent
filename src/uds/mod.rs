@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::cache::SecretCache;
@@ -11,6 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 
+#[cfg(unix)]
 const MAX_REQUEST_BYTES: usize = 4096;
 
 /// Uruchamia serwer UDS (dla Unix) lub mocka (dla Windows).
@@ -37,7 +38,9 @@ pub async fn serve(cache: Arc<SecretCache>, config: AgentConfig) -> std::io::Res
 
 #[cfg(not(unix))]
 pub async fn serve(_cache: Arc<SecretCache>, _config: AgentConfig) -> std::io::Result<()> {
-    tracing::warn!("Unix Domain Sockets nie są wspierane natywnie na tej platformie (Windows). UDS Server wyłączony w trybie deweloperskim.");
+    tracing::warn!(
+        "Unix Domain Sockets nie są wspierane natywnie na tej platformie (Windows). UDS Server wyłączony w trybie deweloperskim."
+    );
     // Trzymamy task w stanie oczekiwania, aby worker w tle mógł działać lokalnie
     tokio::time::sleep(tokio::time::Duration::from_secs(u64::MAX)).await;
     Ok(())
@@ -63,6 +66,7 @@ async fn handle_connection(mut stream: UnixStream, cache: Arc<SecretCache>) -> s
     Ok(())
 }
 
+#[cfg(unix)]
 fn prepare_socket_dir(socket_path: &Path) -> std::io::Result<()> {
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -73,14 +77,15 @@ fn prepare_socket_dir(socket_path: &Path) -> std::io::Result<()> {
 #[cfg(unix)]
 fn set_socket_permissions(socket_path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let permissions = std::fs::Permissions::from_mode(0o700);
+    let permissions = std::fs::Permissions::from_mode(0o666);
     std::fs::set_permissions(socket_path, permissions)
 }
 
-pub fn cleanup_socket(socket_path: &PathBuf) {
-    if socket_path.exists() {
-        if let Err(err) = std::fs::remove_file(socket_path) {
-            tracing::warn!(error = %err, "nie udało się usunąć pliku socketu");
+pub fn cleanup_socket(socket_path: &Path) {
+    if let Err(err) = std::fs::remove_file(socket_path) {
+        match err.kind() {
+            std::io::ErrorKind::NotFound => {}
+            _ => tracing::warn!(error = %err, "nie udało się usunąć pliku socketu"),
         }
     }
 }

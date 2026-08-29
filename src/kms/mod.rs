@@ -1,7 +1,6 @@
-use std::path::Path;
 use std::time::Duration;
 
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
 use crate::config::AgentConfig;
@@ -19,7 +18,7 @@ pub enum KmsError {
 #[derive(Debug, Deserialize)]
 pub struct SecretPayload {
     pub key: String,
-    pub value: String,
+    pub value: SecretString,
     #[serde(default)]
     pub ttl_secs: Option<u64>,
 }
@@ -29,8 +28,6 @@ struct KmsSecretsResponse {
     secrets: Vec<SecretPayload>,
 }
 
-/// Async klient HTTP do centralnego serwera KMS, autoryzujący się
-/// tokenem ServiceAccount montowanym przez Kubernetes (projected token).
 pub struct KmsClient {
     http: reqwest::Client,
     base_url: String,
@@ -52,21 +49,12 @@ impl KmsClient {
         })
     }
 
-    /// Odczytuje aktualny token ServiceAccount z filesystemu K8s.
-    /// Token jest okresowo rotowany przez kubelet, więc czytamy go
-    /// przy każdej autoryzacji zamiast cache'ować w pamięci na stałe.
     async fn read_service_account_token(&self) -> Result<SecretString, KmsError> {
         let raw = tokio::fs::read_to_string(&self.sa_token_path).await?;
         Ok(SecretString::from(raw.trim().to_owned()))
     }
 
-    /// Pobiera aktualny zestaw sekretów przypisanych do tego klienta.
-    ///
-    /// MOCK: docelowo endpoint i format odpowiedzi zależą od kontraktu
-    /// własnego serwera KMS — do uzupełnienia zgodnie ze specyfikacją API.
     pub async fn fetch_secrets(&self) -> Result<Vec<SecretPayload>, KmsError> {
-        use secrecy::ExposeSecret;
-
         let sa_token = self.read_service_account_token().await?;
         let url = format!("{}/v1/secrets", self.base_url.trim_end_matches('/'));
 
@@ -85,10 +73,4 @@ impl KmsClient {
         let parsed: KmsSecretsResponse = response.json().await?;
         Ok(parsed.secrets)
     }
-}
-
-/// Sprawdza, czy podana ścieżka tokenu istnieje — użyteczne przy starcie
-/// agenta do wczesnego wykrycia błędnej konfiguracji montowania woluminu.
-pub fn service_account_token_present(path: &Path) -> bool {
-    path.exists()
 }

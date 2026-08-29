@@ -2,21 +2,13 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
-use secrecy::{ExposeSecret, SecretString};
-use zeroize::Zeroize;
+use secrecy::SecretString;
 
-/// Pojedynczy wpis w cache — wartość sekretu wraz z momentem wygaśnięcia.
-/// `SecretString` zapewnia zerowanie pamięci przy usunięciu (Drop).
 struct CacheEntry {
     value: SecretString,
     expires_at: Instant,
 }
 
-/// Thread-safe cache sekretów w pamięci RAM.
-///
-/// Sekrety nigdy nie trafiają na dysk. Struktury wewnętrzne opierają się
-/// o `secrecy::SecretString`, które implementuje zero-on-drop, dzięki
-/// czemu usunięcie wpisu nadpisuje bufor pamięci przed zwolnieniem.
 pub struct SecretCache {
     inner: RwLock<HashMap<String, CacheEntry>>,
 }
@@ -28,19 +20,18 @@ impl SecretCache {
         }
     }
 
-    /// Zwraca kopię wartości sekretu, jeśli istnieje i nie wygasł.
+    #[allow(dead_code)]
     pub fn get(&self, key: &str) -> Option<SecretString> {
         let guard = self.inner.read().expect("cache lock poisoned");
         guard.get(key).and_then(|entry| {
             if entry.expires_at > Instant::now() {
-                Some(SecretString::from(entry.value.expose_secret().to_owned()))
+                Some(entry.value.clone())
             } else {
                 None
             }
         })
     }
 
-    /// Wstawia lub nadpisuje sekret wraz z jego TTL.
     pub fn insert(&self, key: String, value: SecretString, ttl: Duration) {
         let mut guard = self.inner.write().expect("cache lock poisoned");
         guard.insert(
@@ -52,13 +43,12 @@ impl SecretCache {
         );
     }
 
-    /// Usuwa pojedynczy wpis (np. po rotacji/unieważnieniu).
-    pub fn remove(&self, key: &str) {
+    #[allow(dead_code)]
+    pub fn retain_keys(&self, valid_keys: &[String]) {
         let mut guard = self.inner.write().expect("cache lock poisoned");
-        guard.remove(key);
+        guard.retain(|k, _| valid_keys.contains(k));
     }
 
-    /// Zwraca listę kluczy zbliżających się do wygaśnięcia (do odnowienia przez worker).
     pub fn keys_expiring_within(&self, window: Duration) -> Vec<String> {
         let guard = self.inner.read().expect("cache lock poisoned");
         let threshold = Instant::now() + window;
@@ -69,16 +59,3 @@ impl SecretCache {
             .collect()
     }
 }
-
-impl Drop for CacheEntry {
-    fn drop(&mut self) {
-        // SecretString już zeruje swój bufor przy Drop; to jawne przypomnienie
-        // API dla przyszłych pól niebędących typami z automatycznym zeroize.
-    }
-}
-
-/// Pomocnicza otoczka do jednorazowych, wrażliwych buforów bajtowych
-/// (np. surowa odpowiedź z KMS przed deserializacją), z gwarancją zerowania.
-#[derive(Zeroize)]
-#[zeroize(drop)]
-pub struct SensitiveBuffer(pub Vec<u8>);

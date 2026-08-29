@@ -7,7 +7,6 @@ mod worker;
 use std::sync::Arc;
 
 use clap::Parser;
-use tokio::signal::unix::{signal, SignalKind};
 use tracing_subscriber::EnvFilter;
 
 use cache::SecretCache;
@@ -26,7 +25,9 @@ pub enum AgentError {
 #[tokio::main]
 async fn main() -> Result<(), AgentError> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .json()
         .init();
 
@@ -41,19 +42,19 @@ async fn main() -> Result<(), AgentError> {
 
     // Wątek tła: pobiera i cyklicznie odnawia sekrety.
     let worker_cache = Arc::clone(&cache);
-    let worker_handle = tokio::spawn(worker::run_renewal_loop(worker_cache, kms_client, config.clone()));
+    let worker_handle = tokio::spawn(worker::run_renewal_loop(
+        worker_cache,
+        kms_client,
+        config.clone(),
+    ));
 
     // Lokalny serwer UDS obsługujący zapytania kontenerów w podzie.
     let uds_cache = Arc::clone(&cache);
     let uds_handle = tokio::spawn(uds::serve(uds_cache, config.clone()));
 
-    // Graceful shutdown na SIGTERM/SIGINT.
-    let mut sigterm = signal(SignalKind::terminate()).map_err(AgentError::Uds)?;
-    let mut sigint = signal(SignalKind::interrupt()).map_err(AgentError::Uds)?;
-
+    // Graceful shutdown zależny od platformy
     tokio::select! {
-        _ = sigterm.recv() => tracing::info!("otrzymano SIGTERM, zamykam agenta"),
-        _ = sigint.recv() => tracing::info!("otrzymano SIGINT, zamykam agenta"),
+        _ = wait_for_shutdown_signal() => tracing::info!("otrzymano sygnał wyłączenia, zamykam agenta"),
         res = worker_handle => {
             tracing::error!(?res, "worker zakończył działanie nieoczekiwanie");
         }
@@ -65,4 +66,30 @@ async fn main() -> Result<(), AgentError> {
     uds::cleanup_socket(&config.socket_path);
     tracing::info!("secret-agent zatrzymany");
     Ok(())
+}
+
+/// Oczekuje na sygnały zamknięcia w zależności od docelowej platformy.
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("nie udało się zarejestrować SIGTERM");
+        let mut sigint =
+            signal(SignalKind::interrupt()).expect("nie udało się zarejestrować SIGINT");
+
+        tokio::select! {
+            _ = sigterm.recv() => tracing::info!("odebrano SIGTERM"),
+            _ = sigint.recv() => tracing::info!("odebrano SIGINT"),
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("nie udało się zarejestrować sygnału Ctrl+C");
+        tracing::info!("odebrano Ctrl+C");
+    }
 }

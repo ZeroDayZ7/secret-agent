@@ -5,10 +5,17 @@ use clap::Parser;
 
 /// Konfiguracja agenta, parsowana z CLI oraz zmiennych środowiskowych (prefiks SECRET_AGENT_).
 #[derive(Parser, Debug, Clone)]
-#[command(name = "secret-agent", about = "Sidecar dystrybuujący sekrety z KMS przez UDS")]
+#[command(
+    name = "secret-agent",
+    about = "Sidecar dystrybuujący sekrety z KMS przez UDS"
+)]
 pub struct AgentConfig {
     /// Ścieżka do gniazda Unix Domain Socket udostępnianego lokalnym kontenerom.
-    #[arg(long, env = "SECRET_AGENT_SOCKET_PATH", default_value = "/run/secret-agent/agent.sock")]
+    #[arg(
+        long,
+        env = "SECRET_AGENT_SOCKET_PATH",
+        default_value = "/run/secret-agent/agent.sock"
+    )]
     pub socket_path: PathBuf,
 
     /// Adres bazowy serwera KMS.
