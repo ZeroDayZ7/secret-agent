@@ -71,7 +71,12 @@ pub struct AgentConfig {
     pub backoff_max_ms: u64,
 
     /// Uprawnienia dla pliku socketu UDS w formacie ósemkowym (domyślnie 0o660).
-    #[arg(long, env = "SECRET_AGENT_SOCKET_MODE", default_value_t = 0o660)]
+    #[arg(
+        long,
+        env = "SECRET_AGENT_SOCKET_MODE",
+        default_value_t = 0o660,
+        value_parser = parse_octal_mode
+    )]
     pub socket_mode: u32,
 }
 
@@ -101,4 +106,11 @@ impl AgentConfig {
         };
         format!("{}{}", base, path)
     }
+}
+
+/// Parsuje zapis praw dostępu (np. "0o660", "0660" lub "660") na wartość liczbową u32 w systemie ósemkowym.
+fn parse_octal_mode(s: &str) -> Result<u32, String> {
+    let trimmed = s.trim();
+    let clean = trimmed.strip_prefix("0o").unwrap_or(trimmed);
+    u32::from_str_radix(clean, 8).map_err(|e| format!("nieprawidłowy format ósemkowy: {e}"))
 }
