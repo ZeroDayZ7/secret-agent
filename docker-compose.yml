@@ -8,6 +8,7 @@ services:
       - sec-net
     environment:
       - SECRET_AGENT_KMS_URL=http://kms-service:8080
+      - SECRET_AGENT_KMS_SECRETS_PATH=/api/v1/agent/credentials/issue
       - SECRET_AGENT_CLIENT_ID=auth-service
       - SECRET_AGENT_SOCKET_PATH=/var/run/agent-sockets/agent.sock
       - SECRET_AGENT_SA_TOKEN_PATH=/run/secrets/sa_token

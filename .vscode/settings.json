@@ -22,7 +22,7 @@
 
     "**/.git": true,
     "**/.gitattributes": true,
-    "**/.gitignore": true,
+    // "**/.gitignore": true,
     "**/.github": true,
     "**/.dockerignore": true,
     "**/.vscode": true,

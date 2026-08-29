@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::AgentConfig;
 
@@ -15,6 +15,11 @@ pub enum KmsError {
     UnexpectedStatus(reqwest::StatusCode),
 }
 
+#[derive(Debug, Serialize)]
+struct IssueCredentialsRequest<'a> {
+    pub client_id: &'a str,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SecretPayload {
     pub key: String,
@@ -25,12 +30,12 @@ pub struct SecretPayload {
 
 #[derive(Debug, Deserialize)]
 struct KmsSecretsResponse {
-    secrets: Vec<SecretPayload>,
+    pub secrets: Vec<SecretPayload>,
 }
 
 pub struct KmsClient {
     http: reqwest::Client,
-    base_url: String,
+    secrets_url: String,
     sa_token_path: std::path::PathBuf,
     client_id: String,
 }
@@ -43,7 +48,7 @@ impl KmsClient {
 
         Ok(Self {
             http,
-            base_url: config.kms_url.clone(),
+            secrets_url: config.secrets_full_url(),
             sa_token_path: config.sa_token_path.clone(),
             client_id: config.client_id.clone(),
         })
@@ -56,13 +61,18 @@ impl KmsClient {
 
     pub async fn fetch_secrets(&self) -> Result<Vec<SecretPayload>, KmsError> {
         let sa_token = self.read_service_account_token().await?;
-        let url = format!("{}/v1/secrets", self.base_url.trim_end_matches('/'));
 
+        let request_body = IssueCredentialsRequest {
+            client_id: &self.client_id,
+        };
+
+        // Wykonujemy żądanie POST pod /api/v1/agent/credentials/issue
         let response = self
             .http
-            .get(&url)
+            .post(&self.secrets_url)
             .bearer_auth(sa_token.expose_secret())
             .header("X-Client-Id", &self.client_id)
+            .json(&request_body)
             .send()
             .await?;
 

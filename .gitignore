@@ -1,6 +1,7 @@
 /target
 /secrets
 /combined.txt
+**/roznice.patch
 **/*.rs.bk
 *.pdb
 .env

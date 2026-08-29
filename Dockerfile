@@ -14,11 +14,17 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
 COPY src ./src
 RUN touch src/main.rs && cargo build --release --locked
 
+# 1. Tworzymy katalog na socket i nadajemy pełne prawa dla użytkownika nonroot (UID 65532)
+RUN mkdir -p /build/agent-sockets && chown -R 65532:65532 /build/agent-sockets
+
 # --- Etap 2: minimalistyczny obraz produkcyjny ---
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 
 # Kopiujemy gotową binarkę z etapu builder
 COPY --from=builder /build/target/release/secret-agent /usr/local/bin/secret-agent
+
+# 2. Kopiujemy przygotowany katalog z prawami zapisu dla nonroot
+COPY --from=builder --chown=65532:65532 /build/agent-sockets /var/run/agent-sockets
 
 USER nonroot:nonroot
 

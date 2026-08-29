@@ -22,6 +22,14 @@ pub struct AgentConfig {
     #[arg(long, env = "SECRET_AGENT_KMS_URL")]
     pub kms_url: String,
 
+    /// Ścieżka REST API w KMS do pobierania sekretów.
+    #[arg(
+        long,
+        env = "SECRET_AGENT_KMS_SECRETS_PATH",
+        default_value = "/api/v1/agent/credentials/issue"
+    )]
+    pub kms_secrets_path: String,
+
     /// Ścieżka do tokenu ServiceAccount montowanego przez Kubernetes.
     #[arg(
         long,
@@ -38,7 +46,18 @@ pub struct AgentConfig {
     #[arg(long, env = "SECRET_AGENT_DEFAULT_TTL_SECS", default_value_t = 300)]
     pub default_ttl_secs: u64,
 
-    /// Minimalny odstęp między próbami ponowienia po błędzie (backoff bazowy, ms).
+    /// Interwał cyklicznego odpytywania cache (w sekundach).
+    #[arg(long, env = "SECRET_AGENT_POLL_INTERVAL_SECS", default_value_t = 15)]
+    pub poll_interval_secs: u64,
+
+    /// Okno czasowe przed wygaśnięciem sekretu kwalifikujące go do odnowienia (w sekundach).
+    #[arg(
+        long,
+        env = "SECRET_AGENT_RENEWAL_LOOKAHEAD_SECS",
+        default_value_t = 30
+    )]
+    pub renewal_lookahead_secs: u64,
+
     #[arg(long, env = "SECRET_AGENT_BACKOFF_BASE_MS", default_value_t = 500)]
     pub backoff_base_ms: u64,
 
@@ -50,5 +69,23 @@ pub struct AgentConfig {
 impl AgentConfig {
     pub fn default_ttl(&self) -> Duration {
         Duration::from_secs(self.default_ttl_secs)
+    }
+
+    pub fn poll_interval(&self) -> Duration {
+        Duration::from_secs(self.poll_interval_secs)
+    }
+
+    pub fn renewal_lookahead(&self) -> Duration {
+        Duration::from_secs(self.renewal_lookahead_secs)
+    }
+
+    pub fn secrets_full_url(&self) -> String {
+        let base = self.kms_url.trim_end_matches('/');
+        let path = if self.kms_secrets_path.starts_with('/') {
+            self.kms_secrets_path.clone()
+        } else {
+            format!("/{}", self.kms_secrets_path)
+        };
+        format!("{}{}", base, path)
     }
 }
