@@ -123,7 +123,13 @@ impl KmsClient {
 
         let parsed: KmsSecretsResponse = response.json().await?;
 
-        // Zamiana odpowiedzi z KMS na pary klucz-wartość w obiekcie cache
+       tracing::debug!(
+            credential_id = %parsed.credential_id,
+            username = %parsed.username,
+            expires_at = %parsed.expires_at,
+            "Pomyślnie pobrano nowe poświadczenia tymczasowe z KMS"
+        );
+
         Ok(vec![
             SecretPayload {
                 key: format!("{}_username", self.target_service),

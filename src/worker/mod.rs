@@ -14,38 +14,56 @@ pub async fn run_renewal_loop(cache: Arc<SecretCache>, kms_client: KmsClient, co
     let mut backoff = Duration::from_millis(config.backoff_base_ms);
     let backoff_max = Duration::from_millis(config.backoff_max_ms);
 
+    tracing::debug!(
+        target_service = %config.target_service,
+        default_ttl_secs = config.default_ttl_secs,
+        poll_interval_secs = config.poll_interval_secs,
+        renewal_lookahead_secs = config.renewal_lookahead_secs,
+        "Uruchamiam pętlę zarządzania sekretami w agencie"
+    );
+
     // Pierwsze, pełne pobranie sekretów przy starcie agenta.
+    tracing::info!("Pobieram początkowy zestaw poświadczeń z KMS przy starcie...");
     if let Err(err) = refresh_all(&cache, &kms_client, &config).await {
-        tracing::error!(error = %err, "wstępne pobranie sekretów z KMS nie powiodło się");
+        tracing::error!(error = %err, "❌ Wstępne pobranie sekretów z KMS nie powiodło się");
+    } else {
+        tracing::info!("✅ Początkowe poświadczenia zostały pomyślnie załadowane do cache agenta");
     }
 
-    // Używamy dynamicznego interwału z konfiguracji
     let mut poll_timer = tokio::time::interval(config.poll_interval());
 
     loop {
         tokio::select! {
             _ = poll_timer.tick() => {
-                // Czyszczenie przeterminowanych sekretów przy każdym cyklu pętli,
-                // nawet jeśli żaden sekret nie wymaga odnowienia w KMS.
                 cache.purge_expired();
 
-                // Używamy dynamicznego okna wyprzedzenia z konfiguracji
                 let expiring = cache.keys_expiring_within(config.renewal_lookahead());
+                
+                // Dodajemy log diagnostyczny co tick (można zmienić na debug)
+                tracing::debug!(
+                    cached_keys_count = expiring.len(),
+                    "Sprawdzam stan wygasania sekretów w cache"
+                );
+
                 if expiring.is_empty() {
                     continue;
                 }
 
-                tracing::debug!(count = expiring.len(), "odnawiam sekrety zbliżające się do wygaśnięcia");
+                tracing::info!(
+                    count = expiring.len(),
+                    "⚠️ Wykryto sekrety zbliżające się do wygaśnięcia lub wygasłe. Rozpoczynam odnawianie w KMS..."
+                );
 
                 match refresh_all(&cache, &kms_client, &config).await {
                     Ok(()) => {
+                        tracing::info!("✅ Pomyślnie odnowiono poświadczenia z KMS");
                         backoff = Duration::from_millis(config.backoff_base_ms);
                     }
                     Err(err) => {
                         tracing::warn!(
                             error = %err,
                             backoff_ms = backoff.as_millis(),
-                            "odnowienie sekretów nie powiodło się, ponawiam z backoff"
+                            "❌ Odnowienie sekretów nie powiodło się, ponawiam z backoff"
                         );
                         tokio::time::sleep(backoff).await;
                         backoff = std::cmp::min(backoff * 2, backoff_max);
