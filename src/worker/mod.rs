@@ -38,8 +38,7 @@ pub async fn run_renewal_loop(cache: Arc<SecretCache>, kms_client: KmsClient, co
                 cache.purge_expired();
 
                 let expiring = cache.keys_expiring_within(config.renewal_lookahead());
-                
-                // Dodajemy log diagnostyczny co tick (można zmienić na debug)
+
                 tracing::debug!(
                     cached_keys_count = expiring.len(),
                     "Sprawdzam stan wygasania sekretów w cache"

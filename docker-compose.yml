@@ -13,7 +13,7 @@ services:
       # - SECRET_AGENT_HMAC_KEY_FILE=/run/secrets/agent_hmac_key
       - SECRET_AGENT_HMAC_KEY=super-long-random-secret-for-auth-service-hmac-64-bytes
       - SECRET_AGENT_SOCKET_PATH=/var/run/agent-sockets/agent.sock
-      - RUST_LOG=info
+      - RUST_LOG=debug
 
       - SECRET_AGENT_TARGET_SERVICE=postgres_auth
       - SECRET_AGENT_TARGET_TYPE=postgres

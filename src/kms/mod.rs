@@ -123,7 +123,7 @@ impl KmsClient {
 
         let parsed: KmsSecretsResponse = response.json().await?;
 
-       tracing::debug!(
+        tracing::debug!(
             credential_id = %parsed.credential_id,
             username = %parsed.username,
             expires_at = %parsed.expires_at,
