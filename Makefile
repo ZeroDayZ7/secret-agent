@@ -16,9 +16,12 @@ clippy:
 test:
 	cargo test --workspace --all-targets --all-features
 
+docker-build:
+	docker compose build
+
 docker-up:
 	docker network create kms_sec-net 2>/dev/null || true
-	docker compose up -d --build --force-recreate
+	docker compose up -d --force-recreate
 
 docker-down:
 	docker compose down -v
