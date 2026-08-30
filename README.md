@@ -1,33 +1,77 @@
-# KMS Platform
+# Secret Agent Sidecar
 
-A Rust-based mono-repo Key Management System built to stop keys from floating around as plaintext in configurations and databases. Powered by microservices, vHSM isolation, and Shamir's ceremonies.
+A sidecar service written in Rust that handles dynamic credential management between application microservices and the KMS (Key Management Service).
 
-<p align="center">
-  <img src="docs/assets/banner.png" alt="KMS Platform Architecture" />
-</p>
+## What it does
 
-## Workspace Layout
+The **Secret Agent** acts as an intermediary for microservices to securely access database credentials and HMAC keys without managing long-lived secrets directly.
 
-| Component              | Role        | What it does                                                                              |
-| :--------------------- | :---------- | :---------------------------------------------------------------------------------------- |
-| **`kms-core`**         | Library     | Shared models, SSS (Shamir's Secret Sharing), IPC protocol, and cryptographic primitives. |
-| **`kms-service`**      | API Service | Lifecycle management for DEK/KEK, key rotation, and versioning.                           |
-| **`vhsm-daemon`**      | vHSM Daemon | Isolated process holding the master key strictly in RAM; handles IPC over sockets.        |
-| **`kms-ceremony-cli`** | CLI Utility | Executes key split ceremonies and generates operator shares.                              |
+* **Dynamic DB Credentials:** Requests short-lived PostgreSQL credentials from the KMS and automatically rotates them before expiration.
+* **Secret Caching:** Keeps valid credentials in memory to serve connected microservices instantly.
+* **Unix Domain Socket Interface:** Exposes a local IPC interface over Unix Domain Sockets (UDS) so local application services can retrieve credentials securely over standard file sockets without opening network ports.
 
 ---
 
-## Architecture & Security
+## How it Works
 
-- **Master Key Providers:**
-  - **`local`**: Dev/standalone mode (direct access to the key within the service).(deprecated)
-  - **`hsm`**: Zero-trust mode. `kms-service` has zero knowledge of the master key; every cryptographic operation is delegated via Unix Socket to `vhsm-daemon`.
+1. **Initialization:** On startup, the sidecar connects to the KMS via HTTP/gRPC using service authentication tokens.
+2. **Credential Fetching:** When requested by an application service via UDS, the agent fetches or generates temporary access credentials from KMS.
+3. **IPC Delivery:** The agent returns credentials over the UDS socket (`/var/run/agent-sockets/agent.sock`) to the requesting service (e.g., `auth-service`).
 
-- **Virtual HSM (vHSM):**
-  - Runs as an isolated process with memory sandboxing.
-  - Binary communication based on a length-prefixed protocol (4-byte big-endian header).
-  - Zero disk persistence for the root key; requires a formal ceremony unlock sequence.
+---
 
-- **Shamir's Secret Sharing (SSS) Ceremony:**
-  - The root master key is generated and split into $N$ shares with an $M$-of-$N$ threshold requirement.
-  - Unlocking the `vhsm-daemon` requires submitting the required number of valid, decrypted-on-the-fly shares via the CLI.
+## Socket API Protocol
+
+Services communicate with the sidecar by writing simple text commands over the Unix socket:
+
+* **Get DB Username:**
+```bash
+GET postgres_auth_username
+# Response: OK kms_tmp_XXXXXX
+
+```
+
+
+* **Get DB Password:**
+```bash
+GET postgres_auth_password
+# Response: OK <generated_password>
+
+```
+
+
+* **Get HMAC Key:**
+```bash
+GET hmac_key_<key_alias>
+# Response: OK <secret_key_bytes>
+
+```
+
+
+
+---
+
+## Configuration
+
+Set via environment variables:
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `KMS_ENDPOINT` | URL of the central KMS service | `http://kms-service:8080` |
+| `SOCKET_PATH` | Path to the local Unix socket file | `/var/run/agent-sockets/agent.sock` |
+| `TARGET_SERVICE` | Name of the service this sidecar belongs to | `auth-service` |
+| `CREDENTIAL_TTL` | Cache duration before requesting new credentials | `300s` |
+
+---
+
+## Local Development & Debugging
+
+You can test the UDS socket directly using `nc` (netcat) or `socat`:
+
+```bash
+# Query DB username from the sidecar socket
+echo "GET postgres_auth_username" | nc -U /var/run/agent-sockets/agent.sock
+
+```
+
+> **Note:** Clearing database volumes locally during development requires restarting the agent to invalidate cached temporary credentials.
