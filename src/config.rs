@@ -3,14 +3,12 @@ use std::time::Duration;
 
 use clap::Parser;
 
-/// Konfiguracja agenta, parsowana z CLI oraz zmiennych środowiskowych (prefiks SECRET_AGENT_).
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "secret-agent",
     about = "Sidecar dystrybuujący sekrety z KMS przez UDS"
 )]
 pub struct AgentConfig {
-    /// Ścieżka do gniazda Unix Domain Socket udostępnianego lokalnym kontenerom.
     #[arg(
         long,
         env = "SECRET_AGENT_SOCKET_PATH",
@@ -18,11 +16,9 @@ pub struct AgentConfig {
     )]
     pub socket_path: PathBuf,
 
-    /// Adres bazowy serwera KMS.
     #[arg(long, env = "SECRET_AGENT_KMS_URL")]
     pub kms_url: String,
 
-    /// Ścieżka REST API w KMS do pobierania sekretów.
     #[arg(
         long,
         env = "SECRET_AGENT_KMS_SECRETS_PATH",
@@ -30,27 +26,30 @@ pub struct AgentConfig {
     )]
     pub kms_secrets_path: String,
 
-    /// Klucz HMAC używany do podpisywania żądań do KMS.
     #[arg(long, env = "SECRET_AGENT_HMAC_KEY")]
     pub hmac_key: String,
 
-    /// Identyfikator poda/aplikacji używany przy autoryzacji w KMS.
     #[arg(long, env = "SECRET_AGENT_CLIENT_ID")]
     pub client_id: String,
 
-    /// Timeout dla zapytania HTTP do KMS w sekundach (domyślnie 10 s).
+    #[arg(long, env = "SECRET_AGENT_TARGET_SERVICE")]
+    pub target_service: String,
+
+    #[arg(long, env = "SECRET_AGENT_TARGET_TYPE")]
+    pub target_type: String,
+
+    #[arg(long, env = "SECRET_AGENT_RESOURCE")]
+    pub resource: String,
+
     #[arg(long, env = "SECRET_AGENT_KMS_TIMEOUT_SECS", default_value_t = 10)]
     pub kms_timeout_secs: u64,
 
-    /// Domyślny TTL sekretów, gdy KMS go nie zwróci (2700 sekund = 45 minut).
     #[arg(long, env = "SECRET_AGENT_DEFAULT_TTL_SECS", default_value_t = 2700)]
     pub default_ttl_secs: u64,
 
-    /// Interwał cyklicznego sprawdzania cache (15 sekund).
     #[arg(long, env = "SECRET_AGENT_POLL_INTERVAL_SECS", default_value_t = 15)]
     pub poll_interval_secs: u64,
 
-    /// Okno wyprzedzenia przed wygaśnięciem kwalifikujące sekret do odnowienia (900 sekund = 15 minut).
     #[arg(
         long,
         env = "SECRET_AGENT_RENEWAL_LOOKAHEAD_SECS",
@@ -58,15 +57,12 @@ pub struct AgentConfig {
     )]
     pub renewal_lookahead_secs: u64,
 
-    /// Minimalny odstęp między próbami ponowienia po błędzie (backoff bazowy, ms).
     #[arg(long, env = "SECRET_AGENT_BACKOFF_BASE_MS", default_value_t = 500)]
     pub backoff_base_ms: u64,
 
-    /// Maksymalny odstęp backoffu (ms).
     #[arg(long, env = "SECRET_AGENT_BACKOFF_MAX_MS", default_value_t = 30_000)]
     pub backoff_max_ms: u64,
 
-    /// Uprawnienia dla pliku socketu UDS w formacie ósemkowym (domyślnie 0o660).
     #[arg(
         long,
         env = "SECRET_AGENT_SOCKET_MODE",
@@ -104,7 +100,6 @@ impl AgentConfig {
     }
 }
 
-/// Parsuje zapis praw dostępu (np. "0o660", "0660" lub "660") na wartość liczbową u32 w systemie ósemkowym.
 fn parse_octal_mode(s: &str) -> Result<u32, String> {
     let trimmed = s.trim();
     let clean = trimmed.strip_prefix("0o").unwrap_or(trimmed);

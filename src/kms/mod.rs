@@ -1,5 +1,5 @@
 use hmac::{Hmac, Mac};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -9,20 +9,16 @@ type HmacSha256 = Hmac<Sha256>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum KmsError {
-    #[error("błąd obliczania HMAC: {0}")]
+    #[error("Błąd obliczania HMAC: {0}")]
     Hmac(String),
-    #[error("błąd żądania HTTP do KMS: {0}")]
+    #[error("Błąd żądania HTTP do KMS: {0}")]
     Http(#[from] reqwest::Error),
-    #[error("KMS zwrócił nieoczekiwany status: {0}")]
+    #[error("KMS zwrócił nieoczekiwany status HTTP: {0}")]
     UnexpectedStatus(reqwest::StatusCode),
 }
 
-#[derive(Debug, Serialize)]
-struct IssueCredentialsRequest<'a> {
-    pub client_id: &'a str,
-}
-
-#[derive(Debug, Deserialize)]
+/// Domyślny format sekretu zapisywanego w cache Agenta
+#[derive(Debug, Clone, Deserialize)]
 pub struct SecretPayload {
     pub key: String,
     pub value: SecretString,
@@ -30,9 +26,23 @@ pub struct SecretPayload {
     pub ttl_secs: Option<u64>,
 }
 
+/// DTO żądania wysyłanego do KMS przy wydawaniu poświadczeń
+#[derive(Debug, Serialize)]
+struct IssueCredentialsRequest<'a> {
+    pub target_service: &'a str,
+    pub target_type: &'a str,
+    pub resource: &'a str,
+    pub ttl_seconds: u64,
+}
+
+/// DTO odpowiedzi zwrotnej z KMS (zgodne z API backendu)
 #[derive(Debug, Deserialize)]
-struct KmsSecretsResponse {
-    pub secrets: Vec<SecretPayload>,
+#[allow(dead_code)]
+pub struct KmsSecretsResponse {
+    pub credential_id: uuid::Uuid,
+    pub username: String,
+    pub password: SecretString,
+    pub expires_at: String,
 }
 
 pub struct KmsClient {
@@ -40,6 +50,10 @@ pub struct KmsClient {
     secrets_url: String,
     secrets_path: String,
     client_id: String,
+    target_service: String,
+    target_type: String,
+    resource: String,
+    default_ttl_secs: u64,
     hmac_key: SecretString,
 }
 
@@ -60,13 +74,16 @@ impl KmsClient {
             secrets_url: config.secrets_full_url(),
             secrets_path: path,
             client_id: config.client_id.clone(),
+            target_service: config.target_service.clone(),
+            target_type: config.target_type.clone(),
+            resource: config.resource.clone(),
+            default_ttl_secs: config.default_ttl_secs,
             hmac_key: SecretString::from(config.hmac_key.clone()),
         })
     }
 
-    /// Oblicza podpis HMAC-SHA256 dla przekazanej treści.
+    /// Oblicza podpis HMAC-SHA256 dla przekazanego ciągu bajtów.
     fn compute_hmac(&self, data: &[u8]) -> Result<String, KmsError> {
-        use secrecy::ExposeSecret;
         let mut mac = HmacSha256::new_from_slice(self.hmac_key.expose_secret().as_bytes())
             .map_err(|e| KmsError::Hmac(e.to_string()))?;
         mac.update(data);
@@ -74,22 +91,21 @@ impl KmsClient {
         Ok(hex::encode(result.into_bytes()))
     }
 
+    /// Pobiera poświadczenia z backendu KMS i przekształca je do formatu cache Agenta.
     pub async fn fetch_secrets(&self) -> Result<Vec<SecretPayload>, KmsError> {
         let request_body = IssueCredentialsRequest {
-            client_id: &self.client_id,
+            target_service: &self.target_service,
+            target_type: &self.target_type,
+            resource: &self.resource,
+            ttl_seconds: self.default_ttl_secs,
         };
 
-        // 1. Najpierw generujemy timestamp
         let timestamp = chrono::Utc::now().timestamp().to_string();
-
-        // 2. Budujemy kanoniczny payload zgodny z KMS: method:path:timestamp
         let method = "POST";
         let canonical_payload = format!("{}:{}:{}", method, self.secrets_path, timestamp);
 
-        // 3. Liczymy podpis HMAC z przygotowanego ciągu
         let signature = self.compute_hmac(canonical_payload.as_bytes())?;
 
-        // 4. Wysyłamy żądanie z kompletem wymaganych nagłówków
         let response = self
             .http
             .post(&self.secrets_url)
@@ -106,6 +122,19 @@ impl KmsClient {
         }
 
         let parsed: KmsSecretsResponse = response.json().await?;
-        Ok(parsed.secrets)
+
+        // Zamiana odpowiedzi z KMS na pary klucz-wartość w obiekcie cache
+        Ok(vec![
+            SecretPayload {
+                key: format!("{}_username", self.target_service),
+                value: SecretString::from(parsed.username),
+                ttl_secs: Some(self.default_ttl_secs),
+            },
+            SecretPayload {
+                key: format!("{}_password", self.target_service),
+                value: parsed.password,
+                ttl_secs: Some(self.default_ttl_secs),
+            },
+        ])
     }
 }
