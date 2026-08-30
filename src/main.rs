@@ -32,15 +32,11 @@ async fn main() -> Result<(), AgentError> {
         .init();
 
     let config = AgentConfig::parse();
-    tracing::info!(socket_path = %config.socket_path.display(), "startuje secret-agent");
+    tracing::info!(socket_path = %config.socket_path.display(), "🚀 Startuje secret-agent w Rust");
 
-    // Współdzielony, thread-safe cache sekretów (RwLock + zeroize on drop).
     let cache: Arc<SecretCache> = Arc::new(SecretCache::new());
-
-    // Klient KMS autoryzujący się tokenem ServiceAccount.
     let kms_client = kms::KmsClient::new(&config)?;
 
-    // Wątek tła: pobiera i cyklicznie odnawia sekrety.
     let worker_cache = Arc::clone(&cache);
     let worker_handle = tokio::spawn(worker::run_renewal_loop(
         worker_cache,
@@ -48,27 +44,24 @@ async fn main() -> Result<(), AgentError> {
         config.clone(),
     ));
 
-    // Lokalny serwer UDS obsługujący zapytania kontenerów w podzie.
     let uds_cache = Arc::clone(&cache);
     let uds_handle = tokio::spawn(uds::serve(uds_cache, config.clone()));
 
-    // Graceful shutdown zależny od platformy
     tokio::select! {
-        _ = wait_for_shutdown_signal() => tracing::info!("otrzymano sygnał wyłączenia, zamykam agenta"),
+        _ = wait_for_shutdown_signal() => tracing::info!("🛑 Otrzymano sygnał wyłączenia, zamykam agenta"),
         res = worker_handle => {
-            tracing::error!(?res, "worker zakończył działanie nieoczekiwanie");
+            tracing::error!(?res, "Worker zakończył działanie nieoczekiwanie");
         }
         res = uds_handle => {
-            tracing::error!(?res, "serwer UDS zakończył działanie nieoczekiwanie");
+            tracing::error!(?res, "Serwer UDS zakończył działanie nieoczekiwanie");
         }
     }
 
     uds::cleanup_socket(&config.socket_path);
-    tracing::info!("secret-agent zatrzymany");
+    tracing::info!("Secret-agent został zatrzymany");
     Ok(())
 }
 
-/// Oczekuje na sygnały zamknięcia w zależności od docelowej platformy.
 async fn wait_for_shutdown_signal() {
     #[cfg(unix)]
     {
@@ -80,8 +73,8 @@ async fn wait_for_shutdown_signal() {
             signal(SignalKind::interrupt()).expect("nie udało się zarejestrować SIGINT");
 
         tokio::select! {
-            _ = sigterm.recv() => tracing::info!("odebrano SIGTERM"),
-            _ = sigint.recv() => tracing::info!("odebrano SIGINT"),
+            _ = sigterm.recv() => tracing::info!("Odebrano SIGTERM"),
+            _ = sigint.recv() => tracing::info!("Odebrano SIGINT"),
         }
     }
 
@@ -90,6 +83,5 @@ async fn wait_for_shutdown_signal() {
         tokio::signal::ctrl_c()
             .await
             .expect("nie udało się zarejestrować sygnału Ctrl+C");
-        tracing::info!("odebrano Ctrl+C");
     }
 }

@@ -17,16 +17,13 @@ pub enum KmsError {
     UnexpectedStatus(reqwest::StatusCode),
 }
 
-/// Domyślny format sekretu zapisywanego w cache Agenta
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SecretPayload {
     pub key: String,
     pub value: SecretString,
-    #[serde(default)]
     pub ttl_secs: Option<u64>,
 }
 
-/// DTO żądania wysyłanego do KMS przy wydawaniu poświadczeń
 #[derive(Debug, Serialize)]
 struct IssueCredentialsRequest<'a> {
     pub target_service: &'a str,
@@ -35,13 +32,13 @@ struct IssueCredentialsRequest<'a> {
     pub ttl_seconds: u64,
 }
 
-/// DTO odpowiedzi zwrotnej z KMS (zgodne z API backendu)
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct KmsSecretsResponse {
+    #[allow(dead_code)]
     pub credential_id: uuid::Uuid,
     pub username: String,
     pub password: SecretString,
+    #[allow(dead_code)]
     pub expires_at: String,
 }
 
@@ -82,7 +79,6 @@ impl KmsClient {
         })
     }
 
-    /// Oblicza podpis HMAC-SHA256 dla przekazanego ciągu bajtów.
     fn compute_hmac(&self, data: &[u8]) -> Result<String, KmsError> {
         let mut mac = HmacSha256::new_from_slice(self.hmac_key.expose_secret().as_bytes())
             .map_err(|e| KmsError::Hmac(e.to_string()))?;
@@ -91,7 +87,6 @@ impl KmsClient {
         Ok(hex::encode(result.into_bytes()))
     }
 
-    /// Pobiera poświadczenia z backendu KMS i przekształca je do formatu cache Agenta.
     pub async fn fetch_secrets(&self) -> Result<Vec<SecretPayload>, KmsError> {
         let request_body = IssueCredentialsRequest {
             target_service: &self.target_service,
@@ -123,24 +118,17 @@ impl KmsClient {
 
         let parsed: KmsSecretsResponse = response.json().await?;
 
-        tracing::debug!(
-            credential_id = %parsed.credential_id,
-            username = %parsed.username,
-            expires_at = %parsed.expires_at,
-            "Pomyślnie pobrano nowe poświadczenia tymczasowe z KMS"
-        );
+        // Formatujemy wynik jako ustrukturyzowany pakiet JSON dla Postgresa
+        let pg_json = serde_json::json!({
+            "username": parsed.username,
+            "password": parsed.password.expose_secret()
+        })
+        .to_string();
 
-        Ok(vec![
-            SecretPayload {
-                key: format!("{}_username", self.target_service),
-                value: SecretString::from(parsed.username),
-                ttl_secs: Some(self.default_ttl_secs),
-            },
-            SecretPayload {
-                key: format!("{}_password", self.target_service),
-                value: parsed.password,
-                ttl_secs: Some(self.default_ttl_secs),
-            },
-        ])
+        Ok(vec![SecretPayload {
+            key: format!("{}_postgres", self.target_service),
+            value: SecretString::from(pg_json),
+            ttl_secs: Some(self.default_ttl_secs),
+        }])
     }
 }

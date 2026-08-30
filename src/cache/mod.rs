@@ -4,9 +4,10 @@ use std::time::{Duration, Instant};
 
 use secrecy::SecretString;
 
-struct CacheEntry {
-    value: SecretString,
-    expires_at: Instant,
+pub struct CacheEntry {
+    #[allow(dead_code)]
+    pub value: SecretString,
+    pub expires_at: Instant,
 }
 
 pub struct SecretCache {
@@ -32,12 +33,6 @@ impl SecretCache {
         })
     }
 
-    pub fn purge_expired(&self) {
-        let mut guard = self.inner.write().expect("cache lock poisoned");
-        let now = Instant::now();
-        guard.retain(|_, entry| entry.expires_at > now);
-    }
-
     pub fn insert(&self, key: String, value: SecretString, ttl: Duration) {
         let mut guard = self.inner.write().expect("cache lock poisoned");
         guard.insert(
@@ -49,10 +44,10 @@ impl SecretCache {
         );
     }
 
-    #[allow(dead_code)]
-    pub fn retain_keys(&self, valid_keys: &[String]) {
+    pub fn purge_expired(&self) {
         let mut guard = self.inner.write().expect("cache lock poisoned");
-        guard.retain(|k, _| valid_keys.contains(k));
+        let now = Instant::now();
+        guard.retain(|_, entry| entry.expires_at > now);
     }
 
     pub fn keys_expiring_within(&self, window: Duration) -> Vec<String> {
