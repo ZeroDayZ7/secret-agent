@@ -1,7 +1,8 @@
 use hmac::{Hmac, Mac};
-use secrecy::{ExposeSecret, SecretString};
+use rmp_serde::{from_slice, to_vec};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::config::AgentConfig;
 
@@ -13,6 +14,10 @@ pub enum KmsError {
     Hmac(String),
     #[error("Błąd żądania HTTP do KMS: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("Błąd kodowania MessagePack: {0}")]
+    MsgpackEncode(#[from] rmp_serde::encode::Error),
+    #[error("Błąd dekodowania MessagePack: {0}")]
+    MsgpackDecode(#[from] rmp_serde::decode::Error),
     #[error("KMS zwrócił nieoczekiwany status HTTP: {0}")]
     UnexpectedStatus(reqwest::StatusCode),
 }
@@ -20,7 +25,7 @@ pub enum KmsError {
 #[derive(Debug, Clone)]
 pub struct SecretPayload {
     pub key: String,
-    pub value: SecretString,
+    pub value: Zeroizing<Vec<u8>>,
     pub ttl_secs: Option<u64>,
 }
 
@@ -32,14 +37,13 @@ struct IssueCredentialsRequest<'a> {
     pub ttl_seconds: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
 pub struct KmsSecretsResponse {
-    #[allow(dead_code)]
+    #[zeroize(skip)]
     pub credential_id: uuid::Uuid,
     pub username: String,
-    pub password: SecretString,
-    #[allow(dead_code)]
-    pub expires_at: String,
+    pub password: Zeroizing<Vec<u8>>,
+    pub expires_at: u64,
 }
 
 pub struct KmsClient {
@@ -51,7 +55,7 @@ pub struct KmsClient {
     target_type: String,
     resource: String,
     default_ttl_secs: u64,
-    hmac_key: SecretString,
+    hmac_key: Zeroizing<Vec<u8>>,
 }
 
 impl KmsClient {
@@ -75,12 +79,12 @@ impl KmsClient {
             target_type: config.target_type.clone(),
             resource: config.resource.clone(),
             default_ttl_secs: config.default_ttl_secs,
-            hmac_key: SecretString::from(config.hmac_key.clone()),
+            hmac_key: Zeroizing::new(config.hmac_key.as_bytes().to_vec()),
         })
     }
 
     fn compute_hmac(&self, data: &[u8]) -> Result<String, KmsError> {
-        let mut mac = HmacSha256::new_from_slice(self.hmac_key.expose_secret().as_bytes())
+        let mut mac = HmacSha256::new_from_slice(&self.hmac_key)
             .map_err(|e| KmsError::Hmac(e.to_string()))?;
         mac.update(data);
         let result = mac.finalize();
@@ -101,6 +105,9 @@ impl KmsClient {
 
         let signature = self.compute_hmac(canonical_payload.as_bytes())?;
 
+        // Serializujemy payload żądania do MessagePack
+        let body_bytes = Zeroizing::new(to_vec(&request_body)?);
+
         let response = self
             .http
             .post(&self.secrets_url)
@@ -108,7 +115,8 @@ impl KmsClient {
             .header("X-Service-ID", &self.client_id)
             .header("X-Service-Name", &self.client_id)
             .header("X-Timestamp", timestamp)
-            .json(&request_body)
+            .header("Content-Type", "application/msgpack")
+            .body(body_bytes.to_vec())
             .send()
             .await?;
 
@@ -116,18 +124,15 @@ impl KmsClient {
             return Err(KmsError::UnexpectedStatus(response.status()));
         }
 
-        let parsed: KmsSecretsResponse = response.json().await?;
+        let bytes = Zeroizing::new(response.bytes().await?.to_vec());
+        let parsed: KmsSecretsResponse = from_slice(&bytes)?;
 
-        // Formatujemy wynik jako ustrukturyzowany pakiet JSON dla Postgresa
-        let pg_json = serde_json::json!({
-            "username": parsed.username,
-            "password": parsed.password.expose_secret()
-        })
-        .to_string();
+        // Serializacja struktury poświadczeń bezpośrednio do ramki bajtów MessagePack
+        let raw_creds_payload = Zeroizing::new(to_vec(&parsed)?);
 
         Ok(vec![SecretPayload {
-            key: format!("{}_postgres", self.target_service),
-            value: SecretString::from(pg_json),
+            key: format!("{}_{}", self.target_service, self.resource),
+            value: raw_creds_payload,
             ttl_secs: Some(self.default_ttl_secs),
         }])
     }

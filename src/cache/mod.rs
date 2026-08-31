@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
-use secrecy::SecretString;
+use zeroize::Zeroizing;
 
 pub struct CacheEntry {
     #[allow(dead_code)]
-    pub value: SecretString,
+    pub value: Zeroizing<Vec<u8>>,
     pub expires_at: Instant,
 }
 
@@ -22,7 +22,7 @@ impl SecretCache {
     }
 
     #[allow(dead_code)]
-    pub fn get(&self, key: &str) -> Option<SecretString> {
+    pub fn get(&self, key: &str) -> Option<Zeroizing<Vec<u8>>> {
         let guard = self.inner.read().expect("cache lock poisoned");
         guard.get(key).and_then(|entry| {
             if entry.expires_at > Instant::now() {
@@ -33,7 +33,7 @@ impl SecretCache {
         })
     }
 
-    pub fn insert(&self, key: String, value: SecretString, ttl: Duration) {
+    pub fn insert(&self, key: String, value: Zeroizing<Vec<u8>>, ttl: Duration) {
         let mut guard = self.inner.write().expect("cache lock poisoned");
         guard.insert(
             key,
