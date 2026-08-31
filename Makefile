@@ -26,4 +26,5 @@ docker-up:
 docker-down:
 	docker compose down -v
 
-docker-reset: docker-down docker-up
+dr: docker-down docker-up
+dbr: docker-down docker-build docker-up
