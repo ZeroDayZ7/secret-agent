@@ -23,6 +23,8 @@ struct FullBootstrapResponse {
     redis: Option<rmpv::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     minio: Option<rmpv::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rabbitmq: Option<rmpv::Value>,
 }
 
 #[cfg(unix)]
@@ -88,6 +90,7 @@ async fn handle_connection(
     if req_buf.starts_with(b"REFRESH ") {
         let command_str = String::from_utf8_lossy(&req_buf[8..]);
         let parts: Vec<&str> = command_str.split_whitespace().collect();
+        // Oczekiwany format: REFRESH <target_service> <resource_name> (np. my-service postgres)
         if parts.len() >= 2 {
             let key = format!("{}_{}", parts[0], parts[1]);
             if let Some(secret) = cache.get(&key) {
@@ -97,7 +100,7 @@ async fn handle_connection(
         return send_frame(&mut stream, &[]).await;
     }
 
-    // Fallback: traktuj jako bezpośrednie odpytanie o klucz
+    // Fallback: traktuj jako bezpośrednie odpytanie o klucz w cache
     let cache_key = match std::str::from_utf8(&req_buf) {
         Ok(k) => k.trim(),
         Err(_) => return send_frame(&mut stream, &[]).await,
@@ -124,18 +127,22 @@ fn handle_bootstrap(payload: &[u8], cache: &SecretCache) -> Vec<u8> {
     for svc in &req.services {
         let key = format!("{}_{}", req.target_service, svc);
         if let Some(secret_bytes) = cache.get(&key) {
+            // Deserializujemy surowy MessagePack z cache do dynamicznej wartości MessagePack (rmpv::Value)
             if let Ok(value) = rmp_serde::from_slice::<rmpv::Value>(&secret_bytes) {
                 match svc.as_str() {
                     "postgres" => response.postgres = Some(value),
                     "redis" => response.redis = Some(value),
                     "minio" => response.minio = Some(value),
-                    _ => {}
+                    "rabbitmq" => response.rabbitmq = Some(value),
+                    other => {
+                        tracing::warn!(service = other, "Nieznany serwis w żądaniu bootstrap");
+                    }
                 }
             }
         }
     }
 
-    rmp_serde::to_vec(&response).unwrap_or_default()
+    rmp_serde::to_vec_named(&response).unwrap_or_default()
 }
 
 #[cfg(unix)]

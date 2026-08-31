@@ -1,7 +1,7 @@
 use hmac::{Hmac, Mac};
-use rmp_serde::{from_slice, to_vec};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use tracing::{debug, error, info, instrument, warn};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::config::AgentConfig;
@@ -14,10 +14,8 @@ pub enum KmsError {
     Hmac(String),
     #[error("Błąd żądania HTTP do KMS: {0}")]
     Http(#[from] reqwest::Error),
-    #[error("Błąd kodowania MessagePack: {0}")]
+    #[error("Błąd kodowania MessagePack dla ramki UDS: {0}")]
     MsgpackEncode(#[from] rmp_serde::encode::Error),
-    #[error("Błąd dekodowania MessagePack: {0}")]
-    MsgpackDecode(#[from] rmp_serde::decode::Error),
     #[error("KMS zwrócił nieoczekiwany status HTTP: {0}")]
     UnexpectedStatus(reqwest::StatusCode),
 }
@@ -37,13 +35,23 @@ struct IssueCredentialsRequest<'a> {
     pub ttl_seconds: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
+/// DTO do odebrania odpowiedzi JSON z KMS
+#[derive(Debug, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct KmsSecretsResponse {
     #[zeroize(skip)]
     pub credential_id: uuid::Uuid,
     pub username: String,
+    pub password: Zeroizing<String>,
+    #[zeroize(skip)]
+    pub expires_at: String, // Zachowano ISO8601 String z KMS
+}
+
+/// Binarna struktura przesyłana przez UDS IPC w MessagePacku
+#[derive(Debug, Serialize, Zeroize, ZeroizeOnDrop)]
+#[allow(dead_code)]
+pub struct UdsSecretPayload {
+    pub username: String,
     pub password: Zeroizing<Vec<u8>>,
-    pub expires_at: u64,
 }
 
 pub struct KmsClient {
@@ -60,6 +68,11 @@ pub struct KmsClient {
 
 impl KmsClient {
     pub fn new(config: &AgentConfig) -> Result<Self, KmsError> {
+        info!(
+            "Inicjalizacja KmsClient dla client_id: {}",
+            config.client_id
+        );
+
         let http = reqwest::Client::builder()
             .timeout(config.kms_timeout())
             .build()?;
@@ -70,6 +83,8 @@ impl KmsClient {
             format!("/{}", config.kms_secrets_path)
         };
 
+        debug!("Skonfigurowano ścieżkę KMS: {}", path);
+
         Ok(Self {
             http,
             secrets_url: config.secrets_full_url(),
@@ -79,19 +94,33 @@ impl KmsClient {
             target_type: config.target_type.clone(),
             resource: config.resource.clone(),
             default_ttl_secs: config.default_ttl_secs,
-            hmac_key: config.get_hmac_key().map_err(KmsError::Hmac)?,
+            hmac_key: config.get_hmac_key().map_err(|e| {
+                error!("Błąd podczas pobierania klucza HMAC: {}", e);
+                KmsError::Hmac(e)
+            })?,
         })
     }
 
     fn compute_hmac(&self, data: &[u8]) -> Result<String, KmsError> {
-        let mut mac = HmacSha256::new_from_slice(&self.hmac_key)
-            .map_err(|e| KmsError::Hmac(e.to_string()))?;
+        debug!(
+            "Obliczanie podpisu HMAC dla danych o długości: {} bajtów",
+            data.len()
+        );
+        let mut mac = HmacSha256::new_from_slice(&self.hmac_key).map_err(|e| {
+            error!("Nie udało się zainicjalizować HMAC z klucza: {}", e);
+            KmsError::Hmac(e.to_string())
+        })?;
         mac.update(data);
         let result = mac.finalize();
-        Ok(hex::encode(result.into_bytes()))
+        let hex_signature = hex::encode(result.into_bytes());
+        debug!("Pomyślnie wygenerowano podpis HMAC");
+        Ok(hex_signature)
     }
 
+    #[instrument(skip(self), fields(client_id = %self.client_id, target_service = %self.target_service, resource = %self.resource))]
     pub async fn fetch_secrets(&self) -> Result<Vec<SecretPayload>, KmsError> {
+        info!("Rozpoczynanie pobierania sekretów z KMS");
+
         let request_body = IssueCredentialsRequest {
             target_service: &self.target_service,
             target_type: &self.target_type,
@@ -103,11 +132,14 @@ impl KmsClient {
         let method = "POST";
         let canonical_payload = format!("{}:{}:{}", method, self.secrets_path, timestamp);
 
+        debug!(
+            "Kanoniczny ładunek do podpisu HMAC: '{}'",
+            canonical_payload
+        );
+
         let signature = self.compute_hmac(canonical_payload.as_bytes())?;
 
-        // Serializujemy payload żądania do MessagePack
-        let body_bytes = Zeroizing::new(to_vec(&request_body)?);
-
+        debug!("Wysyłanie żądania POST do KMS URL: {}", self.secrets_url);
         let response = self
             .http
             .post(&self.secrets_url)
@@ -115,20 +147,66 @@ impl KmsClient {
             .header("X-Service-ID", &self.client_id)
             .header("X-Service-Name", &self.client_id)
             .header("X-Timestamp", timestamp)
-            .header("Content-Type", "application/msgpack")
-            .body(body_bytes.to_vec())
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&request_body)
             .send()
-            .await?;
+            .await
+            .map_err(|e| {
+                error!("Błąd komunikacji HTTP z serwerem KMS: {}", e);
+                e
+            })?;
 
-        if !response.status().is_success() {
-            return Err(KmsError::UnexpectedStatus(response.status()));
+        let status = response.status();
+        debug!("Otrzymano odpowiedź z KMS ze statusem HTTP: {}", status);
+
+        if !status.is_success() {
+            warn!("KMS zwrócił niepomyślny status HTTP: {}", status);
+            return Err(KmsError::UnexpectedStatus(status));
         }
 
-        let bytes = Zeroizing::new(response.bytes().await?.to_vec());
-        let parsed: KmsSecretsResponse = from_slice(&bytes)?;
+        let mut parsed: KmsSecretsResponse = response.json().await.map_err(|e| {
+            error!("Nie udało się zdeserializować odpowiedzi JSON z KMS: {}", e);
+            e
+        })?;
 
-        // Serializacja struktury poświadczeń bezpośrednio do ramki bajtów MessagePack
-        let raw_creds_payload = Zeroizing::new(to_vec(&parsed)?);
+        debug!(
+            "Pomyślnie odebrano i zdeserializowano sekrety z KMS. Credential ID: {}",
+            parsed.credential_id
+        );
+
+        // Pobieranie własności do zmiennych
+        let username = std::mem::take(&mut parsed.username);
+        let password_bytes = parsed.password.as_bytes().to_vec();
+
+        debug!(
+            "Przygotowywanie pakietu MessagePack (username: '{}', password_len: {} B)",
+            username,
+            password_bytes.len()
+        );
+
+        // Ręczne zbudowanie formatu MessagePack gwarantujące mapę i typ binarny
+        let payload = rmpv::Value::Map(vec![
+            (
+                rmpv::Value::String("username".into()),
+                rmpv::Value::String(username.into()),
+            ),
+            (
+                rmpv::Value::String("password".into()),
+                rmpv::Value::Binary(password_bytes), // Wymusza format 'bin' kompatybilny z []byte w Go
+            ),
+        ]);
+
+        // Gotowy ładunek zabezpieczony przed zrzutem pamięci
+        let raw_creds_payload = Zeroizing::new(rmp_serde::to_vec(&payload).map_err(|e| {
+            error!("Błąd kodowania MessagePack rmpv::Value: {}", e);
+            e
+        })?);
+
+        info!(
+            "Pomyślnie zaszyfrowano i przygotowano ładunek sekretu dla klucza: {}_{}",
+            self.target_service, self.resource
+        );
 
         Ok(vec![SecretPayload {
             key: format!("{}_{}", self.target_service, self.resource),

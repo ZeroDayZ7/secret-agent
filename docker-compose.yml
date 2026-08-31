@@ -2,7 +2,7 @@ services:
   secret-agent:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: secret-agent
     networks:
       - sec-net
@@ -15,19 +15,25 @@ services:
       - SECRET_AGENT_SOCKET_PATH=/var/run/agent-sockets/agent.sock
       - RUST_LOG=debug
 
+      # Dopasowanie do żądania Bootstrap z Go (target_service: auth_service, resource: postgres)
       - SECRET_AGENT_TARGET_SERVICE=postgres_auth
       - SECRET_AGENT_TARGET_TYPE=postgres
       - SECRET_AGENT_RESOURCE=auth_database
 
       # Opcjonalne nadpisanie czasów (w sekundach):
-      - SECRET_AGENT_KMS_TIMEOUT_SECS=10            # Timeout zapytań HTTP do KMS (sekundy)
-      - SECRET_AGENT_SOCKET_MODE=0o660              # Uprawnienia pliku socketu UDS
-      - SECRET_AGENT_DEFAULT_TTL_SECS=2700          # 45 minut
-      - SECRET_AGENT_RENEWAL_LOOKAHEAD_SECS=900     # 15 minut przed wygaśnięciem
+      - SECRET_AGENT_KMS_TIMEOUT_SECS=10
+      - SECRET_AGENT_SOCKET_MODE=0o660
+      - SECRET_AGENT_DEFAULT_TTL_SECS=2700
+      - SECRET_AGENT_RENEWAL_LOOKAHEAD_SECS=900
       - SECRET_AGENT_POLL_INTERVAL_SECS=15
     secrets:
       - agent_hmac_key
     volumes:
+      # Montowanie kodu źródłowego do autoterminacji i przeładowania binarki przez cargo-watch
+      - .:/app
+      - target_cache:/app/target
+      - cargo_cache:/usr/local/cargo/registry
+      # Dostęp do pliku socketu IPC
       - socket-data:/var/run/agent-sockets
 
 secrets:
@@ -37,6 +43,8 @@ secrets:
 volumes:
   socket-data:
     name: secret_agent_sockets
+  target_cache:
+  cargo_cache:
 
 networks:
   sec-net:
