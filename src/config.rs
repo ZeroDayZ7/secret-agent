@@ -1,7 +1,9 @@
+use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::Parser;
+use zeroize::Zeroizing;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -27,7 +29,10 @@ pub struct AgentConfig {
     pub kms_secrets_path: String,
 
     #[arg(long, env = "SECRET_AGENT_HMAC_KEY")]
-    pub hmac_key: String,
+    pub hmac_key: Option<String>,
+
+    #[arg(long, env = "SECRET_AGENT_HMAC_KEY_FILE")]
+    pub hmac_key_file: Option<PathBuf>,
 
     #[arg(long, env = "SECRET_AGENT_CLIENT_ID")]
     pub client_id: String,
@@ -73,6 +78,34 @@ pub struct AgentConfig {
 }
 
 impl AgentConfig {
+    /// Pobiera klucz HMAC: w pierwszej kolejności z pliku (SECRET_AGENT_HMAC_KEY_FILE),
+    /// a w przypadku jego braku ze zmiennej środowiskowej (SECRET_AGENT_HMAC_KEY).
+    pub fn get_hmac_key(&self) -> Result<Zeroizing<Vec<u8>>, String> {
+        if let Some(ref path) = self.hmac_key_file {
+            let bytes = fs::read(path).map_err(|e| {
+                format!(
+                    "nie udało się odczytać pliku klucza HMAC ({:?}): {}",
+                    path, e
+                )
+            })?;
+
+            // Obcinamy ewentualne znaki nowej linii (\n / \r\n) z końca pliku
+            let trimmed = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
+            let trimmed = trimmed.strip_suffix(b"\r").unwrap_or(trimmed);
+
+            return Ok(Zeroizing::new(trimmed.to_vec()));
+        }
+
+        if let Some(ref key) = self.hmac_key {
+            return Ok(Zeroizing::new(key.as_bytes().to_vec()));
+        }
+
+        Err(
+            "Brak klucza HMAC: podaj SECRET_AGENT_HMAC_KEY_FILE lub SECRET_AGENT_HMAC_KEY"
+                .to_string(),
+        )
+    }
+
     pub fn default_ttl(&self) -> Duration {
         Duration::from_secs(self.default_ttl_secs)
     }

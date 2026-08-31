@@ -79,7 +79,7 @@ impl KmsClient {
             target_type: config.target_type.clone(),
             resource: config.resource.clone(),
             default_ttl_secs: config.default_ttl_secs,
-            hmac_key: Zeroizing::new(config.hmac_key.as_bytes().to_vec()),
+            hmac_key: config.get_hmac_key().map_err(KmsError::Hmac)?,
         })
     }
 

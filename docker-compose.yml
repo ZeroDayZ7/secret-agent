@@ -11,6 +11,7 @@ services:
       - SECRET_AGENT_KMS_SECRETS_PATH=/api/v1/agent/credentials/issue
       - SECRET_AGENT_CLIENT_ID=auth-service
       - SECRET_AGENT_HMAC_KEY=super-long-random-secret-for-auth-service-hmac-64-bytes
+      # - SECRET_AGENT_HMAC_KEY_FILE=/run/secrets/agent_hmac_key
       - SECRET_AGENT_SOCKET_PATH=/var/run/agent-sockets/agent.sock
       - RUST_LOG=debug
 
@@ -24,10 +25,14 @@ services:
       - SECRET_AGENT_DEFAULT_TTL_SECS=2700          # 45 minut
       - SECRET_AGENT_RENEWAL_LOOKAHEAD_SECS=900     # 15 minut przed wygaśnięciem
       - SECRET_AGENT_POLL_INTERVAL_SECS=15
-    # secrets:
-    #   - agent_hmac_key
+    secrets:
+      - agent_hmac_key
     volumes:
       - socket-data:/var/run/agent-sockets
+
+secrets:
+  agent_hmac_key:
+    file: ./secrets/auth_service_hmac.key
 
 volumes:
   socket-data:
