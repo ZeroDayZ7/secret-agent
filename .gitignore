@@ -5,4 +5,5 @@
 **/*.rs.bk
 *.pdb
 .env
+!.env.dev
 *.sock
