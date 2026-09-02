@@ -23,7 +23,9 @@ services:
       - SECRET_AGENT_KMS_TIMEOUT_SECS=10
       - SECRET_AGENT_SOCKET_MODE=0o660
       - SECRET_AGENT_RENEWAL_LOOKAHEAD_SECS=900
+      # Ile sekund przed wygaśnięciem agent ma odnowić sekret (np. 60s dla testów, 900s na prod)
       - SECRET_AGENT_DEFAULT_TTL_SECS=86400
+      # Co ile sekund agent wybudza się, żeby sprawdzić status w cache
       - SECRET_AGENT_POLL_INTERVAL_SECS=86400
     secrets:
       - agent_hmac_key

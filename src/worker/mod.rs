@@ -72,20 +72,32 @@ pub async fn run_renewal_loop(
     // -------------------------------------------------------------------------
     // 2. CYKLICZNE MONITOROWANIE (Sterowane zmienną SECRET_AGENT_POLL_INTERVAL_SECS)
     // -------------------------------------------------------------------------
-    let mut poll_timer = tokio::time::interval(config.poll_interval());
+    let poll_interval = config.poll_interval();
+    tracing::info!(
+        interval_secs = poll_interval.as_secs(),
+        "⏱️ Uruchamiam cykliczne monitorowanie sekretów"
+    );
+
+    let mut poll_timer = tokio::time::interval(poll_interval);
+    // Pomiń pierwsze natychmiastowe tyknięcie – dopiero co zrobiliśmy bootstrap w Fazie 1!
+    poll_timer.tick().await;
 
     loop {
+        // Czekamy pełny interwał (np. 86400s lub 10s w dev)
         poll_timer.tick().await;
+
         cache.purge_expired();
 
         let expiring = cache.keys_expiring_within(config.renewal_lookahead());
 
         if expiring.is_empty() {
+            tracing::debug!("🔍 Brak sekretów wymagających odnowienia.");
             continue;
         }
 
         tracing::info!(
             count = expiring.len(),
+            keys = ?expiring,
             "⚠️ Wykryto sekrety zbliżające się do wygaśnięcia. Odnawiam..."
         );
 

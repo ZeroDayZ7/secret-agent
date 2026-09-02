@@ -3,13 +3,13 @@ service:
 
 credentials:
   - name: "postgres"
-    type: "database"
-    resource: "auth_db"
+    type: "postgres"
+    resource: "auth_database"
 
-  - name: "redis"
-    type: "redis"
-    resource: "cache_cluster"
+  # - name: "redis"
+  #   type: "redis"
+  #   resource: "cache_cluster"
 
-  - name: "rabbitmq"
-    type: "amqp"
-    resource: "events_broker"
+  # - name: "rabbitmq"
+  #   type: "amqp"
+  #   resource: "events_broker"
