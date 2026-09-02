@@ -26,11 +26,6 @@ pub async fn run_renewal_loop(
             items_count = manifest.credentials.len(),
             "📦 Pobieram pełny zestaw poświadczeń z KMS (Batch Bootstrap)..."
         );
-        tracing::debug!(
-            items_count = manifest.credentials.len(),
-            "📦 Pobieram pełny zestaw poświadczeń z KMS (Batch Bootstrap)..."
-        );
-
         match kms_client
             .fetch_batch_bootstrap(&manifest.credentials)
             .await
@@ -43,7 +38,7 @@ pub async fn run_renewal_loop(
                 tracing::info!(
                     loaded_secrets = count,
                     expected = manifest.credentials.len(),
-                    "✅ Wszystkie poświadczenia zostały pomyślnie załadowane do cache"
+                    "✅ Wszystkie poświadczenia zostały pomyślnie załadowane do cache",
                 );
 
                 if let Err(err) = state.transition(AgentState::Ready) {

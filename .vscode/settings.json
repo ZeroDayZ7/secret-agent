@@ -14,8 +14,8 @@
 
     // "**/tests": true,
     
-    "**/*.env": true,
-    "**/.env.*": true,
+    // "**/*.env": true,
+    // "**/.env.*": true,
 
     "**/README.md": true,
     "**/LICENSE": true,
