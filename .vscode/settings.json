@@ -6,15 +6,19 @@
 
     "**/.git": true,
     "**/.gitattributes": true,
-    // "**/.gitignore": true,
+    "**/.gitignore": true,
     "**/.github": true,
     "**/.dockerignore": true,
+    "**/Dockerfile": true,
+    "**/secrets": true,
 
     // "**/tests": true,
-    "**/LICENSE": true,
-    // "**/*.env": true,
-    "**/README.md": true,
     
+    "**/*.env": true,
+    "**/.env.*": true,
+
+    "**/README.md": true,
+    "**/LICENSE": true,
     "**/SECURITY.md": true
   },
   "search.exclude": {

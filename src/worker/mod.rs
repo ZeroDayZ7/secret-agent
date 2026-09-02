@@ -127,18 +127,16 @@ async fn refresh_expiring(
     kms_client: &KmsClient,
     manifest: &ServiceManifest,
 ) -> Result<(), crate::kms::KmsError> {
-    let mut updated_secrets = std::collections::HashMap::new();
-
     for key in expiring_keys {
         if let Some(credential) = manifest.credentials.iter().find(|c| &c.name == key) {
-            let secret = kms_client.fetch_single_secret(credential).await?;
-            updated_secrets.insert(secret.key.clone(), secret);
+            match kms_client.fetch_single_secret(credential).await {
+                Ok(secret) => {
+                    tracing::info!(key = %secret.key, "Odebrano odświeżony sekret");
+                    cache.update_single(secret.key.clone(), secret); // POPRAWNE
+                }
+                Err(err) => tracing::error!(error = %err, key = %key, "Błąd odnowienia pojedynczego sekretu"),
+            }
         }
     }
-
-    if !updated_secrets.is_empty() {
-        cache.update_all(updated_secrets);
-    }
-
     Ok(())
 }

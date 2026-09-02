@@ -69,7 +69,17 @@ async fn handle_connection(
     let mut req_buf = vec![0u8; req_len];
     stream.read_exact(&mut req_buf).await?;
 
+    // === 1. LOG: Co dokładnie odebrał Rust ===
+    let raw_payload_str = String::from_utf8_lossy(&req_buf);
+    tracing::info!(
+        req_len = req_len,
+        payload = %raw_payload_str,
+        is_uds_accepted = state.is_uds_accepted(),
+        "📥 UDS IPC: Odebrano żądanie"
+    );
+
     if !state.is_uds_accepted() {
+        tracing::warn!("⚠️ UDS odrzucił połączenie: Agent nie jest w stanie Ready/Bootstrap");
         return send_frame(&mut stream, &[]).await;
     }
 
@@ -86,6 +96,7 @@ async fn handle_connection(
         if let Some(secret) = cache.get(name) {
             return send_frame(&mut stream, &secret.value).await;
         }
+        tracing::warn!(key = %name, "⚠️ Klucz nie został znaleziony w cache dla komendy GET");
         return send_frame(&mut stream, &[]).await;
     }
 
