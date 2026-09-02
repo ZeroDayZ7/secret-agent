@@ -4,7 +4,7 @@ service:
 credentials:
   - name: "postgres"
     type: "postgres"
-    resource: "auth_database"
+    resource: "postgres_auth"
 
   # - name: "redis"
   #   type: "redis"

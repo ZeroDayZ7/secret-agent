@@ -43,7 +43,8 @@ impl SecretPayload {
 #[derive(Debug, Serialize)]
 struct IssueCredentialsRequest<'a> {
     pub name: &'a str,
-    pub credential_type: &'a str,
+    pub target_service: &'a str,
+    pub target_type: &'a str,
     pub resource: &'a str,
     pub ttl_seconds: u64,
 }
@@ -148,9 +149,11 @@ impl KmsClient {
         let request_id = uuid::Uuid::new_v4().to_string();
         let started_at = std::time::Instant::now();
 
+        let target_service = credential.resolved_target_service();
         let request_body = IssueCredentialsRequest {
             name: &credential.name,
-            credential_type: &credential.r#type,
+            target_service: target_service.as_str(),
+            target_type: &credential.r#type,
             resource: &credential.resource,
             ttl_seconds: self.default_ttl_secs,
         };
@@ -162,10 +165,13 @@ impl KmsClient {
         let body_json = serde_json::to_string_pretty(&request_body).unwrap_or_default();
 
         tracing::debug!(
-            "📤 Wysyłanie żądania HTTP do KMS (Single):\n\
+            "[AGENT 1.1] Budowanie żądania pojedynczego credentialu do KMS\n\
              ├─ request_id:   {}\n\
              ├─ url:          {}\n\
              ├─ credential:   {}\n\
+             ├─ target_service: {}\n\
+             ├─ target_type:  {}\n\
+             ├─ resource:     {}\n\
              ├─ x-service-id: {}\n\
              ├─ x-timestamp:  {}\n\
              ├─ x-signature:  {}\n\
@@ -173,10 +179,23 @@ impl KmsClient {
             request_id,
             self.secrets_url,
             credential.name,
+            target_service,
+            credential.r#type,
+            credential.resource,
             self.client_id,
             timestamp,
             signature,
             body_json
+        );
+
+        tracing::info!(
+            request_id = %request_id,
+            credential = %credential.name,
+            target_service = %target_service,
+            target_type = %credential.r#type,
+            resource = %credential.resource,
+            action = "issue-single",
+            "[AGENT 1.2] Wysyłam żądanie pojedynczego credentialu do KMS"
         );
 
         let response = self
@@ -255,7 +274,7 @@ impl KmsClient {
         let body_json = serde_json::to_string_pretty(&request_body).unwrap_or_default();
 
         tracing::debug!(
-            "📤 Wysyłanie żądania HTTP do KMS (Batch Bootstrap):\n\
+            "[AGENT 2.1] Budowanie żądania batch bootstrap do KMS\n\
              ├─ request_id:   {}\n\
              ├─ url:          {}\n\
              ├─ count:        {}\n\
@@ -270,6 +289,13 @@ impl KmsClient {
             timestamp,
             signature,
             body_json
+        );
+
+        tracing::info!(
+            request_id = %request_id,
+            items_count = credentials.len(),
+            action = "issue-batch",
+            "[AGENT 2.2] Wysyłam batch bootstrap do KMS"
         );
 
         let response = self
