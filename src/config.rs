@@ -2,8 +2,23 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use zeroize::Zeroizing;
+
+use crate::manifest::ServiceManifest;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogFormat {
+    Json,
+    Compact,
+    Pretty,
+}
+
+#[derive(Debug, Clone)]
+pub struct LogConfig {
+    pub level: String,
+    pub format: LogFormat,
+}
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -11,6 +26,12 @@ use zeroize::Zeroizing;
     about = "Sidecar dystrybuujący sekrety z KMS przez UDS"
 )]
 pub struct AgentConfig {
+    #[arg(long, env = "LOG__FORMAT", default_value = "pretty", value_enum)]
+    pub log_format: LogFormat,
+
+    #[arg(long, env = "RUST_LOG", default_value = "info")]
+    pub log_level: String,
+
     #[arg(
         long,
         env = "SECRET_AGENT_SOCKET_PATH",
@@ -37,14 +58,11 @@ pub struct AgentConfig {
     #[arg(long, env = "SECRET_AGENT_CLIENT_ID")]
     pub client_id: String,
 
-    #[arg(long, env = "SECRET_AGENT_TARGET_SERVICE")]
-    pub target_service: String,
+    #[arg(long, env = "SECRET_AGENT_MANIFEST_PATH")]
+    pub manifest_path: Option<PathBuf>,
 
-    #[arg(long, env = "SECRET_AGENT_TARGET_TYPE")]
-    pub target_type: String,
-
-    #[arg(long, env = "SECRET_AGENT_RESOURCE")]
-    pub resource: String,
+    #[arg(long, env = "SECRET_AGENT_MANIFEST_CONTENT")]
+    pub manifest_content: Option<String>,
 
     #[arg(long, env = "SECRET_AGENT_KMS_TIMEOUT_SECS", default_value_t = 10)]
     pub kms_timeout_secs: u64,
@@ -78,6 +96,13 @@ pub struct AgentConfig {
 }
 
 impl AgentConfig {
+    pub fn log_config(&self) -> LogConfig {
+        LogConfig {
+            level: self.log_level.clone(),
+            format: self.log_format,
+        }
+    }
+
     /// Pobiera klucz HMAC: w pierwszej kolejności z pliku (SECRET_AGENT_HMAC_KEY_FILE),
     /// a w przypadku jego braku ze zmiennej środowiskowej (SECRET_AGENT_HMAC_KEY).
     pub fn get_hmac_key(&self) -> Result<Zeroizing<Vec<u8>>, String> {
@@ -106,6 +131,7 @@ impl AgentConfig {
         )
     }
 
+    #[allow(dead_code)]
     pub fn default_ttl(&self) -> Duration {
         Duration::from_secs(self.default_ttl_secs)
     }
@@ -131,10 +157,113 @@ impl AgentConfig {
         };
         format!("{}{}", base, path)
     }
+
+    pub fn load_manifest(&self) -> Result<ServiceManifest, String> {
+        if let Some(ref content) = self.manifest_content {
+            return serde_json::from_str::<ServiceManifest>(content)
+                .or_else(|_| serde_yaml::from_str::<ServiceManifest>(content))
+                .map_err(|e| {
+                    format!("nie udało się odczytać manifestu z SECRET_AGENT_MANIFEST_CONTENT: {e}")
+                });
+        }
+
+        if let Some(ref path) = self.manifest_path {
+            let text = fs::read_to_string(path)
+                .map_err(|e| format!("nie udało się odczytać pliku manifestu {:?}: {e}", path))?;
+            return serde_yaml::from_str::<ServiceManifest>(&text)
+                .or_else(|_| serde_json::from_str::<ServiceManifest>(&text))
+                .map_err(|e| format!("nie udało się sparsować manifestu z pliku {:?}: {e}", path));
+        }
+
+        Err("brak manifestu: podaj --manifest-path lub SECRET_AGENT_MANIFEST_CONTENT".to_string())
+    }
 }
 
 fn parse_octal_mode(s: &str) -> Result<u32, String> {
     let trimmed = s.trim();
     let clean = trimmed.strip_prefix("0o").unwrap_or(trimmed);
     u32::from_str_radix(clean, 8).map_err(|e| format!("nieprawidłowy format ósemkowy: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manifest::ServiceManifest;
+
+    #[test]
+    fn parses_manifest_yaml_from_file() {
+        let dir =
+            std::env::temp_dir().join(format!("secret-agent-manifest-{}.yaml", std::process::id()));
+        std::fs::write(
+            &dir,
+            r#"
+service:
+  name: auth
+credentials:
+  - name: postgres
+    type: database
+    resource: auth_db
+  - name: redis
+    type: redis
+    resource: cache_cluster
+"#,
+        )
+        .unwrap();
+
+        let config = AgentConfig {
+            log_format: LogFormat::Pretty,
+            log_level: "debug".into(),
+            socket_path: "/tmp/test.sock".into(),
+            kms_url: "https://kms.example".into(),
+            kms_secrets_path: "/api/v1/agent/credentials/issue".into(),
+            hmac_key: None,
+            hmac_key_file: None,
+            client_id: "client-test".into(),
+            manifest_path: Some(dir.clone()),
+            manifest_content: None,
+            kms_timeout_secs: 10,
+            default_ttl_secs: 2700,
+            poll_interval_secs: 15,
+            renewal_lookahead_secs: 900,
+            backoff_base_ms: 500,
+            backoff_max_ms: 30000,
+            socket_mode: 0o660,
+        };
+
+        let manifest = config.load_manifest().unwrap();
+        assert_eq!(manifest.service.name, "auth");
+        assert_eq!(manifest.credentials.len(), 2);
+        assert_eq!(manifest.credentials[0].name, "postgres");
+
+        let _ = std::fs::remove_file(dir);
+    }
+
+    #[test]
+    fn parses_manifest_json_from_env_content() {
+        let config = AgentConfig {
+            log_format: LogFormat::Json,
+            log_level: "info".into(),
+            socket_path: "/tmp/test.sock".into(),
+            kms_url: "https://kms.example".into(),
+            kms_secrets_path: "/api/v1/agent/credentials/issue".into(),
+            hmac_key: None,
+            hmac_key_file: None,
+            client_id: "client-test".into(),
+            manifest_path: None,
+            manifest_content: Some(
+                r#"{"service":{"name":"auth"},"credentials":[{"name":"postgres","type":"database","resource":"auth_db"}]}"#
+                    .to_string(),
+            ),
+            kms_timeout_secs: 10,
+            default_ttl_secs: 2700,
+            poll_interval_secs: 15,
+            renewal_lookahead_secs: 900,
+            backoff_base_ms: 500,
+            backoff_max_ms: 30000,
+            socket_mode: 0o660,
+        };
+
+        let manifest: ServiceManifest = config.load_manifest().unwrap();
+        assert_eq!(manifest.credentials[0].r#type, "database");
+    }
 }

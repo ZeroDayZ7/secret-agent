@@ -1,0 +1,39 @@
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
+
+use crate::config::{LogConfig, LogFormat};
+
+pub fn init_logging(config: &LogConfig) {
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(config.level.as_str()));
+
+    let console_layer = match config.format {
+        LogFormat::Json => tracing_subscriber::fmt::layer()
+            .json()
+            .with_span_list(false)
+            .with_writer(std::io::stdout)
+            .with_timer(tracing_subscriber::fmt::time::ChronoLocal::rfc_3339())
+            .with_target(false)
+            .boxed(),
+        LogFormat::Compact => tracing_subscriber::fmt::layer()
+            .compact()
+            .with_writer(std::io::stdout)
+            .with_timer(tracing_subscriber::fmt::time::ChronoLocal::rfc_3339())
+            .with_ansi(true)
+            .with_target(false)
+            .boxed(),
+        LogFormat::Pretty => tracing_subscriber::fmt::layer()
+            .pretty()
+            .with_writer(std::io::stdout)
+            .with_timer(tracing_subscriber::fmt::time::ChronoLocal::rfc_3339())
+            .with_ansi(true)
+            .with_target(false)
+            .boxed(),
+    };
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(console_layer)
+        .init();
+}

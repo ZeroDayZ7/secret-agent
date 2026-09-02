@@ -1,0 +1,15 @@
+service:
+  name: "auth-service"
+
+credentials:
+  - name: "postgres"
+    type: "database"
+    resource: "auth_db"
+
+  - name: "redis"
+    type: "redis"
+    resource: "cache_cluster"
+
+  - name: "rabbitmq"
+    type: "amqp"
+    resource: "events_broker"

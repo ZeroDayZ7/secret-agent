@@ -1,16 +1,20 @@
 mod cache;
 mod config;
 mod kms;
+mod logger;
+mod manifest;
+mod state;
 mod uds;
 mod worker;
 
 use std::sync::Arc;
 
 use clap::Parser;
-use tracing_subscriber::EnvFilter;
 
 use cache::SecretCache;
 use config::AgentConfig;
+use state::AgentState;
+use state::AgentStateMachine;
 
 #[derive(thiserror::Error, Debug)]
 pub enum AgentError {
@@ -24,28 +28,38 @@ pub enum AgentError {
 
 #[tokio::main]
 async fn main() -> Result<(), AgentError> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .json()
-        .init();
-
+    // 1. Parsowanie konfiguracji CLI / ENV
     let config = AgentConfig::parse();
+
+    // 2. Inicjalizacja formatowania logów na podstawie zaktualizowanej konfiguracji
+    logger::init_logging(&config.log_config());
+
     tracing::info!(socket_path = %config.socket_path.display(), "🚀 Startuje secret-agent w Rust");
 
+    let manifest = config.load_manifest().map_err(AgentError::Config)?;
+    tracing::info!(service = %manifest.service.name, credentials = manifest.credentials.len(), "📦 Załadowano manifest credentialów");
+
     let cache: Arc<SecretCache> = Arc::new(SecretCache::new());
+    let state = Arc::new(AgentStateMachine::new());
+    state
+        .transition(AgentState::Bootstrapping)
+        .map_err(AgentError::Config)?;
+
     let kms_client = kms::KmsClient::new(&config)?;
 
     let worker_cache = Arc::clone(&cache);
+    let worker_state = Arc::clone(&state);
     let worker_handle = tokio::spawn(worker::run_renewal_loop(
         worker_cache,
+        worker_state,
         kms_client,
         config.clone(),
+        manifest.clone(),
     ));
 
     let uds_cache = Arc::clone(&cache);
-    let uds_handle = tokio::spawn(uds::serve(uds_cache, config.clone()));
+    let uds_state = Arc::clone(&state);
+    let uds_handle = tokio::spawn(uds::serve(uds_cache, uds_state, config.clone()));
 
     tokio::select! {
         _ = wait_for_shutdown_signal() => tracing::info!("🛑 Otrzymano sygnał wyłączenia, zamykam agenta"),
