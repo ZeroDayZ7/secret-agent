@@ -29,6 +29,7 @@ impl SecretCache {
             .and_then(|entry| entry.is_valid().then(|| entry.clone()))
     }
 
+    #[allow(dead_code)]
     pub fn values(&self) -> HashMap<String, SecretPayload> {
         (*self.snapshot()).clone()
     }

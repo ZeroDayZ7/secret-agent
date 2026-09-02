@@ -12,6 +12,12 @@ pub enum AgentState {
     ShuttingDown,
 }
 
+impl std::fmt::Display for AgentState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentStateMachine {
     inner: Arc<RwLock<AgentState>>,
@@ -19,8 +25,10 @@ pub struct AgentStateMachine {
 
 impl AgentStateMachine {
     pub fn new() -> Self {
+        let initial = AgentState::Starting;
+        tracing::info!(state = %initial, "🤖 Maszyna stanów zainicjalizowana");
         Self {
-            inner: Arc::new(RwLock::new(AgentState::Starting)),
+            inner: Arc::new(RwLock::new(initial)),
         }
     }
 
@@ -30,7 +38,18 @@ impl AgentStateMachine {
 
     pub fn set(&self, next: AgentState) {
         let mut guard = self.inner.write().expect("agent state lock poisoned");
+        let prev = *guard;
         *guard = next;
+
+        if prev != next {
+            tracing::debug!(
+                from = %prev,
+                to = %next,
+                "🔄 Zmiana stanu agenta: [{}] ──> [{}]",
+                prev,
+                next
+            );
+        }
     }
 
     pub fn transition(&self, next: AgentState) -> Result<AgentState, String> {
@@ -64,10 +83,12 @@ impl AgentStateMachine {
         );
 
         if !valid {
-            return Err(format!(
-                "invalid state transition from {:?} to {:?}",
+            let err_msg = format!(
+                "Nieprawidłowe przejście stanu: [{}] ──x [{}]",
                 current, next
-            ));
+            );
+            tracing::error!(from = %current, to = %next, "❌ {}", err_msg);
+            return Err(err_msg);
         }
 
         self.set(next);

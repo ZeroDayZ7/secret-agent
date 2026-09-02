@@ -49,6 +49,13 @@ pub struct AgentConfig {
     )]
     pub kms_secrets_path: String,
 
+    #[arg(
+        long,
+        env = "SECRET_AGENT_KMS_BATCH_SECRETS_PATH",
+        default_value = "/api/v1/agent/credentials/issue-batch"
+    )]
+    pub kms_batch_secrets_path: String,
+
     #[arg(long, env = "SECRET_AGENT_HMAC_KEY")]
     pub hmac_key: Option<String>,
 
@@ -158,6 +165,16 @@ impl AgentConfig {
         format!("{}{}", base, path)
     }
 
+    pub fn batch_secrets_full_url(&self) -> String {
+        let base = self.kms_url.trim_end_matches('/');
+        let path = if self.kms_batch_secrets_path.starts_with('/') {
+            self.kms_batch_secrets_path.clone()
+        } else {
+            format!("/{}", self.kms_batch_secrets_path)
+        };
+        format!("{}{}", base, path)
+    }
+
     pub fn load_manifest(&self) -> Result<ServiceManifest, String> {
         if let Some(ref content) = self.manifest_content {
             return serde_json::from_str::<ServiceManifest>(content)
@@ -216,6 +233,7 @@ credentials:
             socket_path: "/tmp/test.sock".into(),
             kms_url: "https://kms.example".into(),
             kms_secrets_path: "/api/v1/agent/credentials/issue".into(),
+            kms_batch_secrets_path: "/api/v1/agent/credentials/issue-batch".into(),
             hmac_key: None,
             hmac_key_file: None,
             client_id: "client-test".into(),
@@ -246,6 +264,7 @@ credentials:
             socket_path: "/tmp/test.sock".into(),
             kms_url: "https://kms.example".into(),
             kms_secrets_path: "/api/v1/agent/credentials/issue".into(),
+            kms_batch_secrets_path: "/api/v1/agent/credentials/issue-batch".into(),
             hmac_key: None,
             hmac_key_file: None,
             client_id: "client-test".into(),

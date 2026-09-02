@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,84 +17,113 @@ pub async fn run_renewal_loop(
     let mut backoff = Duration::from_millis(config.backoff_base_ms);
     let backoff_max = Duration::from_millis(config.backoff_max_ms);
 
-    tracing::info!("📥 Pobieram początkowy zestaw poświadczeń z KMS...");
-    if let Err(err) = refresh_all(&cache, &state, &kms_client, &manifest, &config).await {
-        tracing::error!(error = %err, "❌ Wstępne pobranie sekretów z KMS nie powiodło się");
-        state.set(AgentState::Degraded);
-    } else {
-        tracing::info!("✅ Początkowe poświadczenia zostały pomyślnie załadowane do cache agenta");
-        let _ = state.transition(AgentState::Ready);
+    // -------------------------------------------------------------------------
+    // 1. FAZA BOOTSTRAPU (Wykonuje się tylko RAZ przy starcie)
+    // -------------------------------------------------------------------------
+    let _ = state.transition(AgentState::Bootstrapping);
+
+    loop {
+        tracing::info!(
+            items_count = manifest.credentials.len(),
+            "📦 Pobieram pełny zestaw poświadczeń z KMS (Batch Bootstrap)..."
+        );
+
+        match kms_client
+            .fetch_batch_bootstrap(&manifest.credentials)
+            .await
+        {
+            Ok(secrets) if !secrets.is_empty() => {
+                let count = secrets.len();
+                cache.update_all(secrets);
+                cache.purge_expired();
+
+                tracing::info!(
+                    loaded_secrets = count,
+                    expected = manifest.credentials.len(),
+                    "✅ Wszystkie poświadczenia zostały pomyślnie załadowane do cache"
+                );
+
+                if let Err(err) = state.transition(AgentState::Ready) {
+                    tracing::error!(error = %err, "❌ Nie udało się przejść do stanu Ready");
+                } else {
+                    tracing::info!("🟢 Agent gotowy – obsługa gniazda UDS aktywna");
+                }
+
+                break; // Sukces bootstrapu – wyjście z pętli inicjalizacyjnej
+            }
+            Ok(_) => {
+                tracing::warn!("⚠️ KMS zwrócił pustą listę sekretów dla manifestu");
+                state.set(AgentState::Degraded);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    retry_in_ms = backoff.as_millis(),
+                    "❌ Błąd pobierania pakietu startowego z KMS. Ponawiam próbę z backoffem..."
+                );
+                state.set(AgentState::Degraded);
+            }
+        }
+
+        tokio::time::sleep(backoff).await;
+        backoff = std::cmp::min(backoff * 2, backoff_max);
     }
 
+    // -------------------------------------------------------------------------
+    // 2. CYKLICZNE MONITOROWANIE (Sterowane zmienną SECRET_AGENT_POLL_INTERVAL_SECS)
+    // -------------------------------------------------------------------------
     let mut poll_timer = tokio::time::interval(config.poll_interval());
 
     loop {
-        tokio::select! {
-            _ = poll_timer.tick() => {
-                cache.purge_expired();
-                let expiring = cache.keys_expiring_within(config.renewal_lookahead());
+        poll_timer.tick().await;
+        cache.purge_expired();
 
-                if expiring.is_empty() {
-                    continue;
-                }
+        let expiring = cache.keys_expiring_within(config.renewal_lookahead());
 
-                tracing::info!(
-                    count = expiring.len(),
-                    "⚠️ Wykryto sekrety zbliżające się do wygaśnięcia. Odnawiam..."
-                );
+        if expiring.is_empty() {
+            continue;
+        }
 
-                state.set(AgentState::Refreshing);
-                match refresh_all(&cache, &state, &kms_client, &manifest, &config).await {
-                    Ok(()) => {
-                        tracing::info!("✅ Pomyślnie odnowiono poświadczenia z KMS");
-                        let _ = state.transition(AgentState::Ready);
-                        backoff = Duration::from_millis(config.backoff_base_ms);
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            error = %err,
-                            backoff_ms = backoff.as_millis(),
-                            "❌ Ponawiam próbę z exponential backoff"
-                        );
-                        state.set(AgentState::Degraded);
-                        tokio::time::sleep(backoff).await;
-                        backoff = std::cmp::min(backoff * 2, backoff_max);
-                    }
-                }
+        tracing::info!(
+            count = expiring.len(),
+            "⚠️ Wykryto sekrety zbliżające się do wygaśnięcia. Odnawiam..."
+        );
+
+        if let Err(err) = state.transition(AgentState::Refreshing) {
+            tracing::warn!(error = %err, "Nie udało się przejść w stan Refreshing");
+        }
+
+        match refresh_expiring(&expiring, &cache, &kms_client, &manifest).await {
+            Ok(()) => {
+                tracing::info!("✅ Pomyślnie odnowiono wygasające poświadczenia w KMS");
+                let _ = state.transition(AgentState::Ready);
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "❌ Błąd odnawiania sekretów");
+                state.set(AgentState::Degraded);
             }
         }
     }
 }
 
-async fn refresh_all(
+async fn refresh_expiring(
+    expiring_keys: &[String],
     cache: &Arc<SecretCache>,
-    state: &Arc<AgentStateMachine>,
     kms_client: &KmsClient,
     manifest: &ServiceManifest,
-    config: &AgentConfig,
 ) -> Result<(), crate::kms::KmsError> {
-    let mut next_snapshot = HashMap::new();
-    for credential in &manifest.credentials {
-        let secret = kms_client.fetch_single_secret(credential).await?;
-        next_snapshot.insert(secret.key.clone(), secret);
+    let mut updated_secrets = std::collections::HashMap::new();
+
+    for key in expiring_keys {
+        if let Some(credential) = manifest.credentials.iter().find(|c| &c.name == key) {
+            let secret = kms_client.fetch_single_secret(credential).await?;
+            updated_secrets.insert(secret.key.clone(), secret);
+        }
     }
 
-    if next_snapshot.is_empty() {
-        state.set(AgentState::Degraded);
-        return Err(crate::kms::KmsError::Hmac(
-            "brak poświadczeń zwróconych przez KMS dla manifestu".to_string(),
-        ));
+    if !updated_secrets.is_empty() {
+        cache.update_all(updated_secrets);
     }
 
-    cache.update_all(next_snapshot);
-    cache.purge_expired();
-    if cache.values().is_empty() {
-        state.set(AgentState::Degraded);
-        return Err(crate::kms::KmsError::Hmac(
-            "poświadczenia z KMS nie mogły zostać zapisane do cache".to_string(),
-        ));
-    }
-
-    let _ = config;
     Ok(())
 }

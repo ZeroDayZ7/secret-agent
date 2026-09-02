@@ -48,17 +48,15 @@ struct IssueCredentialsRequest<'a> {
     pub ttl_seconds: u64,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
-pub struct BatchCredentialRequest {
-    pub credentials: Vec<CredentialSpec>,
+pub struct BatchCredentialRequest<'a> {
+    pub credentials: &'a [CredentialSpec],
     pub ttl_seconds: u64,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct BatchCredentialResponse {
-    pub credentials: HashMap<String, rmpv::Value>,
+    pub credentials: HashMap<String, KmsSecretsResponse>,
 }
 
 #[derive(Debug, Deserialize, Zeroize, ZeroizeOnDrop)]
@@ -82,6 +80,8 @@ pub struct KmsClient {
     http: reqwest::Client,
     secrets_url: String,
     secrets_path: String,
+    batch_secrets_url: String,
+    batch_secrets_path: String,
     client_id: String,
     default_ttl_secs: u64,
     hmac_key: Zeroizing<Vec<u8>>,
@@ -104,12 +104,24 @@ impl KmsClient {
             format!("/{}", config.kms_secrets_path)
         };
 
-        tracing::debug!(kms_path = %path, "Skonfigurowano ścieżkę KMS");
+        let batch_path = if config.kms_batch_secrets_path.starts_with('/') {
+            config.kms_batch_secrets_path.clone()
+        } else {
+            format!("/{}", config.kms_batch_secrets_path)
+        };
+
+        tracing::debug!(
+            kms_path = %path,
+            kms_batch_path = %batch_path,
+            "Skonfigurowano ścieżki KMS"
+        );
 
         Ok(Self {
             http,
             secrets_url: config.secrets_full_url(),
             secrets_path: path,
+            batch_secrets_url: config.batch_secrets_full_url(),
+            batch_secrets_path: batch_path,
             client_id: config.client_id.clone(),
             default_ttl_secs: config.default_ttl_secs,
             hmac_key: config.get_hmac_key().map_err(|e| {
@@ -133,6 +145,9 @@ impl KmsClient {
         &self,
         credential: &CredentialSpec,
     ) -> Result<SecretPayload, KmsError> {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let started_at = std::time::Instant::now();
+
         let request_body = IssueCredentialsRequest {
             name: &credential.name,
             credential_type: &credential.r#type,
@@ -144,18 +159,48 @@ impl KmsClient {
         let canonical_payload = format!("POST:{}:{}", self.secrets_path, timestamp);
         let signature = self.compute_hmac(canonical_payload.as_bytes())?;
 
+        let body_json = serde_json::to_string_pretty(&request_body).unwrap_or_default();
+
+        tracing::debug!(
+            "📤 Wysyłanie żądania HTTP do KMS (Single):\n\
+             ├─ request_id:   {}\n\
+             ├─ url:          {}\n\
+             ├─ credential:   {}\n\
+             ├─ x-service-id: {}\n\
+             ├─ x-timestamp:  {}\n\
+             ├─ x-signature:  {}\n\
+             └─ payload:\n{}",
+            request_id,
+            self.secrets_url,
+            credential.name,
+            self.client_id,
+            timestamp,
+            signature,
+            body_json
+        );
+
         let response = self
             .http
             .post(&self.secrets_url)
-            .header("X-Signature", signature)
+            .header("X-Request-ID", &request_id)
+            .header("X-Signature", &signature)
             .header("X-Service-ID", &self.client_id)
             .header("X-Service-Name", &self.client_id)
-            .header("X-Timestamp", timestamp)
+            .header("X-Timestamp", &timestamp)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .json(&request_body)
             .send()
             .await?;
+
+        let latency_ms = started_at.elapsed().as_millis();
+        tracing::info!(
+            request_id = %request_id,
+            credential = %credential.name,
+            status = response.status().as_u16(),
+            latency_ms = latency_ms,
+            "📥 Otrzymano odpowiedź z KMS"
+        );
 
         if !response.status().is_success() {
             tracing::warn!(
@@ -191,28 +236,101 @@ impl KmsClient {
         })
     }
 
-    #[allow(dead_code)]
-    pub async fn fetch_secrets_for_manifest(
-        &self,
-        credentials: &[CredentialSpec],
-    ) -> Result<Vec<SecretPayload>, KmsError> {
-        let mut results = Vec::with_capacity(credentials.len());
-        for credential in credentials {
-            results.push(self.fetch_single_secret(credential).await?);
-        }
-        Ok(results)
-    }
-
-    #[allow(dead_code)]
-    pub async fn fetch_batch(
+    pub async fn fetch_batch_bootstrap(
         &self,
         credentials: &[CredentialSpec],
     ) -> Result<HashMap<String, SecretPayload>, KmsError> {
-        let mut result = HashMap::new();
-        for credential in credentials {
-            let secret = self.fetch_single_secret(credential).await?;
-            result.insert(secret.key.clone(), secret);
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let started_at = std::time::Instant::now();
+
+        let request_body = BatchCredentialRequest {
+            credentials,
+            ttl_seconds: self.default_ttl_secs,
+        };
+
+        let timestamp = chrono::Utc::now().timestamp().to_string();
+        let canonical_payload = format!("POST:{}:{}", self.batch_secrets_path, timestamp);
+        let signature = self.compute_hmac(canonical_payload.as_bytes())?;
+
+        let body_json = serde_json::to_string_pretty(&request_body).unwrap_or_default();
+
+        tracing::debug!(
+            "📤 Wysyłanie żądania HTTP do KMS (Batch Bootstrap):\n\
+             ├─ request_id:   {}\n\
+             ├─ url:          {}\n\
+             ├─ count:        {}\n\
+             ├─ x-service-id: {}\n\
+             ├─ x-timestamp:  {}\n\
+             ├─ x-signature:  {}\n\
+             └─ payload:\n{}",
+            request_id,
+            self.batch_secrets_url,
+            credentials.len(),
+            self.client_id,
+            timestamp,
+            signature,
+            body_json
+        );
+
+        let response = self
+            .http
+            .post(&self.batch_secrets_url)
+            .header("X-Request-ID", &request_id)
+            .header("X-Signature", &signature)
+            .header("X-Service-ID", &self.client_id)
+            .header("X-Service-Name", &self.client_id)
+            .header("X-Timestamp", &timestamp)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&request_body)
+            .send()
+            .await?;
+
+        let latency_ms = started_at.elapsed().as_millis();
+        tracing::info!(
+            request_id = %request_id,
+            status = response.status().as_u16(),
+            latency_ms = latency_ms,
+            "📥 Otrzymano odpowiedź z KMS (Batch)"
+        );
+
+        if !response.status().is_success() {
+            tracing::warn!(
+                status = %response.status(),
+                "KMS zwrócił status niepowodzenia dla żądania batch"
+            );
+            return Err(KmsError::UnexpectedStatus(response.status()));
         }
-        Ok(result)
+
+        let parsed: BatchCredentialResponse = response.json().await?;
+        let expires_at =
+            Some(Instant::now() + std::time::Duration::from_secs(self.default_ttl_secs));
+        let mut map = HashMap::new();
+
+        for (key, secret_resp) in parsed.credentials {
+            let payload_map = rmpv::Value::Map(vec![
+                (
+                    rmpv::Value::String("username".into()),
+                    rmpv::Value::String(secret_resp.username.clone().into()),
+                ),
+                (
+                    rmpv::Value::String("password".into()),
+                    rmpv::Value::Binary(secret_resp.password.as_bytes().to_vec()),
+                ),
+            ]);
+            let value = rmp_serde::to_vec(&payload_map)?;
+
+            map.insert(
+                key.clone(),
+                SecretPayload {
+                    key,
+                    value: Zeroizing::new(value),
+                    ttl_secs: Some(self.default_ttl_secs),
+                    expires_at,
+                },
+            );
+        }
+
+        Ok(map)
     }
 }
