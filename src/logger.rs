@@ -5,8 +5,8 @@ use tracing_subscriber::{EnvFilter, Layer};
 use crate::config::{LogConfig, LogFormat};
 
 pub fn init_logging(config: &LogConfig) {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(config.level.as_str()));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(config.level.as_str()));
 
     let console_layer = match config.format {
         LogFormat::Json => tracing_subscriber::fmt::layer()
