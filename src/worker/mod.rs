@@ -20,10 +20,13 @@ pub async fn run_renewal_loop(
     // -------------------------------------------------------------------------
     // 1. FAZA BOOTSTRAPU (Wykonuje się tylko RAZ przy starcie)
     // -------------------------------------------------------------------------
-    let _ = state.transition(AgentState::Bootstrapping);
 
     loop {
         tracing::info!(
+            items_count = manifest.credentials.len(),
+            "📦 Pobieram pełny zestaw poświadczeń z KMS (Batch Bootstrap)..."
+        );
+        tracing::debug!(
             items_count = manifest.credentials.len(),
             "📦 Pobieram pełny zestaw poświadczeń z KMS (Batch Bootstrap)..."
         );

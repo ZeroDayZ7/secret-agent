@@ -24,7 +24,7 @@ docker-up:
 	docker compose up -d --force-recreate
 
 docker-down:
-	docker compose down -v
+	docker compose down
 
 dr: docker-down docker-up
 dbr: fmt docker-down docker-build docker-up
