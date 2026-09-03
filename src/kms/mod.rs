@@ -24,12 +24,23 @@ pub enum KmsError {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SecretPayload {
     pub key: String,
     pub value: Zeroizing<Vec<u8>>,
     pub ttl_secs: Option<u64>,
     pub expires_at: Option<Instant>,
+}
+
+impl std::fmt::Debug for SecretPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretPayload")
+            .field("key", &self.key)
+            .field("value", &"<REDACTED>")
+            .field("ttl_secs", &self.ttl_secs)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 impl SecretPayload {
@@ -60,7 +71,7 @@ pub struct BatchCredentialResponse {
     pub credentials: HashMap<String, KmsSecretsResponse>,
 }
 
-#[derive(Debug, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[derive(Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct KmsSecretsResponse {
     #[zeroize(skip)]
     pub credential_id: uuid::Uuid,
@@ -70,11 +81,31 @@ pub struct KmsSecretsResponse {
     pub expires_at: String,
 }
 
+impl std::fmt::Debug for KmsSecretsResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KmsSecretsResponse")
+            .field("credential_id", &self.credential_id)
+            .field("username", &self.username)
+            .field("password", &"<REDACTED>")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
 #[allow(dead_code)]
-#[derive(Debug, Serialize, Zeroize, ZeroizeOnDrop)]
+#[derive(Serialize, Zeroize, ZeroizeOnDrop)]
 pub struct UdsSecretPayload {
     pub username: String,
     pub password: Zeroizing<Vec<u8>>,
+}
+
+impl std::fmt::Debug for UdsSecretPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UdsSecretPayload")
+            .field("username", &self.username)
+            .field("password", &"<REDACTED>")
+            .finish()
+    }
 }
 
 pub struct KmsClient {

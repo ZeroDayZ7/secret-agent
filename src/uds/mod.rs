@@ -13,6 +13,7 @@ pub async fn serve(
     cache: Arc<SecretCache>,
     state: Arc<AgentStateMachine>,
     config: AgentConfig,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     use tokio::net::UnixListener;
 
@@ -25,14 +26,22 @@ pub async fn serve(
     tracing::info!(path = %config.socket_path.display(), "🟢 Serwer UDS IPC nasłuchuje na gnieździe");
 
     loop {
-        let (stream, _addr) = listener.accept().await?;
-        let conn_cache = Arc::clone(&cache);
-        let conn_state = Arc::clone(&state);
-        tokio::spawn(async move {
-            if let Err(err) = handle_connection(stream, conn_cache, conn_state).await {
-                tracing::warn!(error = %err, "⚠️ Błąd podczas obsługi połączenia UDS IPC");
+        tokio::select! {
+            accept = listener.accept() => {
+                let (stream, _addr) = accept?;
+                let conn_cache = Arc::clone(&cache);
+                let conn_state = Arc::clone(&state);
+                tokio::spawn(async move {
+                    if let Err(err) = handle_connection(stream, conn_cache, conn_state).await {
+                        tracing::warn!(error = %err, "⚠️ Błąd podczas obsługi połączenia UDS IPC");
+                    }
+                });
             }
-        });
+            _ = shutdown_rx.changed() => {
+                tracing::info!("UDS serve: otrzymano żądanie shutdown, kończę nasłuch");
+                break;
+            }
+        }
     }
 }
 
@@ -41,6 +50,7 @@ pub async fn serve(
     _cache: Arc<SecretCache>,
     _state: Arc<AgentStateMachine>,
     _config: AgentConfig,
+    mut _shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     tracing::warn!("⚠️ Serwer UDS nie jest wspierany natywnie na systemie Windows.");
     tokio::time::sleep(tokio::time::Duration::from_secs(u64::MAX)).await;
@@ -69,11 +79,23 @@ async fn handle_connection(
     let mut req_buf = vec![0u8; req_len];
     stream.read_exact(&mut req_buf).await?;
 
-    // === 1. LOG: Co dokładnie odebrał Rust ===
+    // === 1. LOG: Bezpieczny podgląd odebranego payloadu (redacted jeśli binarne) ===
     let raw_payload_str = String::from_utf8_lossy(&req_buf);
+    let payload_preview = if req_buf.is_ascii() && raw_payload_str.chars().all(|c| !c.is_control())
+    {
+        // tekstowy payload — pokazujemy krótką podglądówkę
+        if raw_payload_str.len() > 256 {
+            format!("{}... (truncated)", &raw_payload_str[..256])
+        } else {
+            raw_payload_str.to_string()
+        }
+    } else {
+        "<BINARY_REDACTED>".to_string()
+    };
+
     tracing::info!(
         req_len = req_len,
-        payload = %raw_payload_str,
+        payload_preview = %payload_preview,
         is_uds_accepted = state.is_uds_accepted(),
         "📥 UDS IPC: Odebrano żądanie"
     );

@@ -8,6 +8,7 @@ mod uds;
 mod worker;
 
 use std::sync::Arc;
+use tokio::sync::watch;
 
 use clap::Parser;
 
@@ -44,32 +45,54 @@ async fn main() -> Result<(), AgentError> {
     state
         .transition(AgentState::Bootstrapping)
         .map_err(AgentError::Config)?;
+    let kms_client = std::sync::Arc::new(kms::KmsClient::new(&config)?);
 
-    let kms_client = kms::KmsClient::new(&config)?;
+    // shutdown channel: sender set to true to request shutdown
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let worker_cache = Arc::clone(&cache);
     let worker_state = Arc::clone(&state);
-    let worker_handle = tokio::spawn(worker::run_renewal_loop(
+    let worker_kms = Arc::clone(&kms_client);
+    let worker_manifest = std::sync::Arc::new(manifest.clone());
+    let worker_shutdown = shutdown_rx.clone();
+    let mut worker_handle = tokio::spawn(worker::run_renewal_loop(
         worker_cache,
         worker_state,
-        kms_client,
+        worker_kms,
         config.clone(),
-        manifest.clone(),
+        worker_manifest,
+        worker_shutdown,
     ));
 
     let uds_cache = Arc::clone(&cache);
     let uds_state = Arc::clone(&state);
-    let uds_handle = tokio::spawn(uds::serve(uds_cache, uds_state, config.clone()));
+    let uds_shutdown = shutdown_rx.clone();
+    let mut uds_handle = tokio::spawn(uds::serve(
+        uds_cache,
+        uds_state,
+        config.clone(),
+        uds_shutdown,
+    ));
 
+    // Czekamy na sygnał wyłączenia; po jego otrzymaniu wysyłamy request shutdown
     tokio::select! {
         _ = wait_for_shutdown_signal() => tracing::info!("🛑 Otrzymano sygnał wyłączenia, zamykam agenta"),
-        res = worker_handle => {
+        res = &mut worker_handle => {
             tracing::error!(?res, "Worker zakończył działanie nieoczekiwanie");
         }
-        res = uds_handle => {
+        res = &mut uds_handle => {
             tracing::error!(?res, "Serwer UDS zakończył działanie nieoczekiwanie");
         }
     }
+
+    // Request graceful shutdown for background tasks
+    if shutdown_tx.send(true).is_err() {
+        tracing::warn!("Shutdown channel receiver już zamknięty");
+    }
+
+    // Await worker/uds termination (best-effort)
+    let _ = worker_handle.await;
+    let _ = uds_handle.await;
 
     uds::cleanup_socket(&config.socket_path);
     tracing::info!("Secret-agent został zatrzymany");
