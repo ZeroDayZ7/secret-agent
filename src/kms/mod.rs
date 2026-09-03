@@ -119,9 +119,9 @@ impl KmsClient {
 
         Ok(Self {
             http,
-            secrets_url: config.secrets_full_url(),
+            secrets_url: config.kms_full_url(&path),
             secrets_path: path,
-            batch_secrets_url: config.batch_secrets_full_url(),
+            batch_secrets_url: config.kms_full_url(&batch_path),
             batch_secrets_path: batch_path,
             client_id: config.client_id.clone(),
             default_ttl_secs: config.default_ttl_secs,

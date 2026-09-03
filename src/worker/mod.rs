@@ -129,7 +129,9 @@ async fn refresh_expiring(
                     tracing::info!(key = %secret.key, "Odebrano odświeżony sekret");
                     cache.update_single(secret.key.clone(), secret); // POPRAWNE
                 }
-                Err(err) => tracing::error!(error = %err, key = %key, "Błąd odnowienia pojedynczego sekretu"),
+                Err(err) => {
+                    tracing::error!(error = %err, key = %key, "Błąd odnowienia pojedynczego sekretu")
+                }
             }
         }
     }

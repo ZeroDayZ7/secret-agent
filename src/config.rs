@@ -155,24 +155,15 @@ impl AgentConfig {
         Duration::from_secs(self.kms_timeout_secs)
     }
 
-    pub fn secrets_full_url(&self) -> String {
+    /// Buduje pełny URL do wskazanego endpointu KMS na podstawie `kms_url`.
+    pub fn kms_full_url(&self, path: &str) -> String {
         let base = self.kms_url.trim_end_matches('/');
-        let path = if self.kms_secrets_path.starts_with('/') {
-            self.kms_secrets_path.clone()
+        let clean_path = if path.starts_with('/') {
+            path.to_string()
         } else {
-            format!("/{}", self.kms_secrets_path)
+            format!("/{}", path)
         };
-        format!("{}{}", base, path)
-    }
-
-    pub fn batch_secrets_full_url(&self) -> String {
-        let base = self.kms_url.trim_end_matches('/');
-        let path = if self.kms_batch_secrets_path.starts_with('/') {
-            self.kms_batch_secrets_path.clone()
-        } else {
-            format!("/{}", self.kms_batch_secrets_path)
-        };
-        format!("{}{}", base, path)
+        format!("{}{}", base, clean_path)
     }
 
     pub fn load_manifest(&self) -> Result<ServiceManifest, String> {
