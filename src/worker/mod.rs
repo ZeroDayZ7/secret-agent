@@ -142,7 +142,8 @@ async fn refresh_expiring(
     let sem = Arc::new(Semaphore::new(REFRESH_CONCURRENCY));
     let mut handles = Vec::new();
 
-    for key in expiring_keys.iter().cloned() {
+    let owned_keys: Vec<String> = expiring_keys.to_vec();
+    for key in owned_keys {
         let cache = Arc::clone(cache);
         let kms = Arc::clone(kms_client);
         let manifest = Arc::clone(manifest);
@@ -152,7 +153,7 @@ async fn refresh_expiring(
             // Acquire permit to bound concurrency
             let _permit = sem.acquire().await.expect("semaphore closed");
 
-            if let Some(credential) = manifest.credentials.iter().find(|c| &c.name == &key) {
+            if let Some(credential) = manifest.credentials.iter().find(|c| c.name == key.as_str()) {
                 match kms.fetch_single_secret(credential).await {
                     Ok(secret) => {
                         tracing::info!(key = %secret.key, "Odebrano odświeżony sekret");

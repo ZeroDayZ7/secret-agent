@@ -235,7 +235,6 @@ mod tests {
             value: zeroize::Zeroizing::new(
                 rmp_serde::to_vec(&rmpv::Value::String("secret".into())).unwrap(),
             ),
-            ttl_secs: Some(120),
             expires_at: Some(std::time::Instant::now() + std::time::Duration::from_secs(120)),
         };
         cache.update_all(HashMap::from([("postgres".to_string(), payload.clone())]));

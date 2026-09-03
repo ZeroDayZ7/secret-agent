@@ -4,12 +4,29 @@ use std::time::Instant;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use time::OffsetDateTime;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::config::AgentConfig;
 use crate::manifest::CredentialSpec;
 
 type HmacSha256 = Hmac<Sha256>;
+
+pub fn build_hmac_header(
+    secret: &[u8],
+    method: &str,
+    path: &str,
+    timestamp: &str,
+) -> Result<String, KmsError> {
+    let canonical = format!("{}:{}:{}", method, path, timestamp);
+    let mut mac = HmacSha256::new_from_slice(secret).map_err(|e| {
+        tracing::error!(error = %e, "Nie udało się zainicjalizować HMAC z klucza");
+        KmsError::Hmac(e.to_string())
+    })?;
+    mac.update(canonical.as_bytes());
+    let result = mac.finalize();
+    Ok(hex::encode(result.into_bytes()))
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum KmsError {
@@ -28,7 +45,6 @@ pub enum KmsError {
 pub struct SecretPayload {
     pub key: String,
     pub value: Zeroizing<Vec<u8>>,
-    pub ttl_secs: Option<u64>,
     pub expires_at: Option<Instant>,
 }
 
@@ -37,7 +53,6 @@ impl std::fmt::Debug for SecretPayload {
         f.debug_struct("SecretPayload")
             .field("key", &self.key)
             .field("value", &"<REDACTED>")
-            .field("ttl_secs", &self.ttl_secs)
             .field("expires_at", &self.expires_at)
             .finish()
     }
@@ -163,16 +178,6 @@ impl KmsClient {
         })
     }
 
-    fn compute_hmac(&self, data: &[u8]) -> Result<String, KmsError> {
-        let mut mac = HmacSha256::new_from_slice(&self.hmac_key).map_err(|e| {
-            tracing::error!(error = %e, "Nie udało się zainicjalizować HMAC z klucza");
-            KmsError::Hmac(e.to_string())
-        })?;
-        mac.update(data);
-        let result = mac.finalize();
-        Ok(hex::encode(result.into_bytes()))
-    }
-
     pub async fn fetch_single_secret(
         &self,
         credential: &CredentialSpec,
@@ -189,11 +194,8 @@ impl KmsClient {
             ttl_seconds: self.default_ttl_secs,
         };
 
-        let timestamp = chrono::Utc::now().timestamp().to_string();
-        let canonical_payload = format!("POST:{}:{}", self.secrets_path, timestamp);
-        let signature = self.compute_hmac(canonical_payload.as_bytes())?;
-
-        let body_json = serde_json::to_string_pretty(&request_body).unwrap_or_default();
+        let timestamp = OffsetDateTime::now_utc().unix_timestamp().to_string();
+        let signature = build_hmac_header(&self.hmac_key, "POST", &self.secrets_path, &timestamp)?;
 
         tracing::debug!(
             "[AGENT 1.1] Budowanie żądania pojedynczego credentialu do KMS\n\
@@ -205,8 +207,7 @@ impl KmsClient {
              ├─ resource:     {}\n\
              ├─ x-service-id: {}\n\
              ├─ x-timestamp:  {}\n\
-             ├─ x-signature:  {}\n\
-             └─ payload:\n{}",
+             ├─ x-signature:  {}",
             request_id,
             self.secrets_url,
             credential.name,
@@ -216,7 +217,6 @@ impl KmsClient {
             self.client_id,
             timestamp,
             signature,
-            body_json
         );
 
         tracing::info!(
@@ -281,7 +281,6 @@ impl KmsClient {
         Ok(SecretPayload {
             key: credential.name.clone(),
             value: Zeroizing::new(value),
-            ttl_secs: Some(self.default_ttl_secs),
             expires_at,
         })
     }
@@ -298,11 +297,9 @@ impl KmsClient {
             ttl_seconds: self.default_ttl_secs,
         };
 
-        let timestamp = chrono::Utc::now().timestamp().to_string();
-        let canonical_payload = format!("POST:{}:{}", self.batch_secrets_path, timestamp);
-        let signature = self.compute_hmac(canonical_payload.as_bytes())?;
-
-        let body_json = serde_json::to_string_pretty(&request_body).unwrap_or_default();
+        let timestamp = OffsetDateTime::now_utc().unix_timestamp().to_string();
+        let signature =
+            build_hmac_header(&self.hmac_key, "POST", &self.batch_secrets_path, &timestamp)?;
 
         tracing::debug!(
             "[AGENT 2.1] Budowanie żądania batch bootstrap do KMS\n\
@@ -311,15 +308,13 @@ impl KmsClient {
              ├─ count:        {}\n\
              ├─ x-service-id: {}\n\
              ├─ x-timestamp:  {}\n\
-             ├─ x-signature:  {}\n\
-             └─ payload:\n{}",
+             ├─ x-signature:  {}",
             request_id,
             self.batch_secrets_url,
             credentials.len(),
             self.client_id,
             timestamp,
             signature,
-            body_json
         );
 
         tracing::info!(
@@ -382,7 +377,6 @@ impl KmsClient {
                 SecretPayload {
                     key,
                     value: Zeroizing::new(value),
-                    ttl_secs: Some(self.default_ttl_secs),
                     expires_at,
                 },
             );

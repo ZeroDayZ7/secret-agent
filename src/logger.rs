@@ -14,16 +14,14 @@ pub fn init_logging(config: &LogConfig) {
             .json()
             .with_span_list(false)
             .with_writer(std::io::stdout)
-            .with_timer(tracing_subscriber::fmt::time::ChronoLocal::rfc_3339())
+            .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
             .with_target(false)
             .boxed(),
 
         LogFormat::Compact => tracing_subscriber::fmt::layer()
             .compact()
             .with_writer(std::io::stdout)
-            .with_timer(tracing_subscriber::fmt::time::ChronoLocal::new(
-                "%H:%M:%S".to_string(),
-            ))
+            .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
             .with_ansi(true)
             .with_target(false)
             .boxed(),
@@ -31,9 +29,7 @@ pub fn init_logging(config: &LogConfig) {
         LogFormat::Pretty => tracing_subscriber::fmt::layer()
             .compact()
             .with_writer(std::io::stdout)
-            .with_timer(tracing_subscriber::fmt::time::ChronoLocal::new(
-                "%H:%M:%S".to_string(),
-            ))
+            .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
             .with_ansi(true)
             .with_target(false)
             .with_file(false)
