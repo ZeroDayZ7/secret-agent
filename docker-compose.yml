@@ -7,36 +7,15 @@ services:
     networks:
       - sec-net
     environment:
-      - SECRET_AGENT_KMS_URL=http://kms-service:8080
-      - SECRET_AGENT_KMS_SECRETS_PATH=/api/v1/agent/credentials/issue
-      - SECRET_AGENT_KMS_BATCH_SECRETS_PATH=/api/v1/agent/credentials/issue-batch
-      - SECRET_AGENT_CLIENT_ID=auth-service
-      - SECRET_AGENT_HMAC_KEY=super-long-random-secret-for-auth-service-hmac-64-bytes
-      # - SECRET_AGENT_HMAC_KEY_FILE=/run/secrets/agent_hmac_key
-      - SECRET_AGENT_SOCKET_PATH=/var/run/agent-sockets/agent.sock
-      - RUST_LOG=${LOG__LEVEL:-info},secret_agent=debug
-      - LOG__FORMAT=${LOG__FORMAT:-pretty}
-
-      - SECRET_AGENT_MANIFEST_PATH=/app/manifest.yaml
-
-      # Opcjonalne nadpisanie czasów (w sekundach):
-      - SECRET_AGENT_KMS_TIMEOUT_SECS=10
-      - SECRET_AGENT_SOCKET_MODE=0o660
-      - SECRET_AGENT_RENEWAL_LOOKAHEAD_SECS=900
-      # Ile sekund przed wygaśnięciem agent ma odnowić sekret (np. 60s dla testów, 900s na prod)
-      - SECRET_AGENT_DEFAULT_TTL_SECS=86400
-      # Co ile sekund agent wybudza się, żeby sprawdzić status w cache
-      - SECRET_AGENT_POLL_INTERVAL_SECS=86400
-    # env_file:
-    #   - .env
+      - SECRET_AGENT_HMAC_KEY_FILE=/run/secrets/agent_hmac_key
+    env_file:
+      - .env
     secrets:
       - agent_hmac_key
     volumes:
-      # Montowanie kodu źródłowego do autoterminacji i przeładowania binarki przez cargo-watch
       - .:/app
       - target_cache:/app/target
       - cargo_cache:/usr/local/cargo/registry
-      # Dostęp do pliku socketu IPC
       - socket-data:/var/run/agent-sockets
 
 secrets:

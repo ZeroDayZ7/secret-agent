@@ -9,8 +9,8 @@
     "**/.gitignore": true,
     "**/.github": true,
     "**/.dockerignore": true,
-    "**/Dockerfile": true,
-    "**/secrets": true,
+    // "**/Dockerfile": true,
+    // "**/secrets": true,
 
     // "**/tests": true,
     
