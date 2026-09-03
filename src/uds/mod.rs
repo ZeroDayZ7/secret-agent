@@ -43,6 +43,9 @@ pub async fn serve(
             }
         }
     }
+
+    cleanup_socket(&config.socket_path);
+    Ok(())
 }
 
 #[cfg(not(unix))]
