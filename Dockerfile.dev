@@ -1,12 +1,11 @@
 FROM rust:1-slim
 
-# Instalacja zależności systemowych (jeśli potrzebne)
-RUN apt-get update && apt-get install -y pkg-config libssl-dev & rm -rf /var/lib/apt/lists/*
-
-# Instalacja cargo-watch
-RUN cargo install cargo-watch
+# Instalacja zależności systemowych
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Domyślne polecenie uruchamiające obserwatora
-CMD ["cargo", "watch", "-x", "run"]
+CMD ["cargo", "run"]
