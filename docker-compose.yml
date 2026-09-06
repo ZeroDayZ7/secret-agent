@@ -7,7 +7,8 @@ services:
     networks:
       - sec-net
     environment:
-      - SECRET_AGENT_HMAC_KEY_FILE=/run/secrets/agent_hmac_key
+      # - SECRET_AGENT_HMAC_KEY_FILE=/run/secrets/agent_hmac_key
+      - SECRET_AGENT_HMAC_KEY=super-long-random-secret-for-auth-service-hmac-64-bytes
     env_file:
       - .env
     secrets:

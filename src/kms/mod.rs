@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -17,8 +17,13 @@ pub fn build_hmac_header(
     method: &str,
     path: &str,
     timestamp: &str,
+    nonce: &str,
+    body_sha256: &str,
 ) -> Result<String, KmsError> {
-    let canonical = format!("{}:{}:{}", method, path, timestamp);
+    let canonical = format!(
+        "{}:{}:{}:{}:{}",
+        method, path, timestamp, nonce, body_sha256
+    );
     let mut mac = HmacSha256::new_from_slice(secret).map_err(|e| {
         tracing::error!(error = %e, "Nie udało się zainicjalizować HMAC z klucza");
         KmsError::Hmac(e.to_string())
@@ -32,6 +37,8 @@ pub fn build_hmac_header(
 pub enum KmsError {
     #[error("Błąd obliczania HMAC: {0}")]
     Hmac(String),
+    #[error("Błąd serializacji JSON: {0}")]
+    JsonEncode(#[from] serde_json::Error),
     #[error("Błąd żądania HTTP do KMS: {0}")]
     Http(#[from] reqwest::Error),
     #[error("Błąd kodowania MessagePack dla ramki UDS: {0}")]
@@ -183,6 +190,7 @@ impl KmsClient {
         credential: &CredentialSpec,
     ) -> Result<SecretPayload, KmsError> {
         let request_id = uuid::Uuid::new_v4().to_string();
+        let nonce = uuid::Uuid::new_v4().to_string();
         let started_at = std::time::Instant::now();
 
         let target_service = credential.resolved_target_service();
@@ -194,20 +202,32 @@ impl KmsClient {
             ttl_seconds: self.default_ttl_secs,
         };
 
+        let body_bytes = serde_json::to_vec(&request_body)?;
+        let body_sha256 = hex::encode(Sha256::digest(&body_bytes));
+
         let timestamp = OffsetDateTime::now_utc().unix_timestamp().to_string();
-        let signature = build_hmac_header(&self.hmac_key, "POST", &self.secrets_path, &timestamp)?;
+        let signature = build_hmac_header(
+            &self.hmac_key,
+            "POST",
+            &self.secrets_path,
+            &timestamp,
+            &nonce,
+            &body_sha256,
+        )?;
 
         tracing::debug!(
             "[AGENT 1.1] Budowanie żądania pojedynczego credentialu do KMS\n\
-             ├─ request_id:   {}\n\
-             ├─ url:          {}\n\
-             ├─ credential:   {}\n\
+             ├─ request_id:     {}\n\
+             ├─ url:            {}\n\
+             ├─ credential:     {}\n\
              ├─ target_service: {}\n\
-             ├─ target_type:  {}\n\
-             ├─ resource:     {}\n\
-             ├─ x-service-id: {}\n\
-             ├─ x-timestamp:  {}\n\
-             ├─ x-signature:  {}",
+             ├─ target_type:    {}\n\
+             ├─ resource:       {}\n\
+             ├─ x-service-id:   {}\n\
+             ├─ x-timestamp:    {}\n\
+             ├─ x-nonce:        {}\n\
+             ├─ x-body-sha256:  {}\n\
+             ├─ x-signature:    {}",
             request_id,
             self.secrets_url,
             credential.name,
@@ -216,6 +236,8 @@ impl KmsClient {
             credential.resource,
             self.client_id,
             timestamp,
+            nonce,
+            body_sha256,
             signature,
         );
 
@@ -237,9 +259,11 @@ impl KmsClient {
             .header("X-Service-ID", &self.client_id)
             .header("X-Service-Name", &self.client_id)
             .header("X-Timestamp", &timestamp)
+            .header("X-Nonce", &nonce)
+            .header("X-Body-SHA256", &body_sha256)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
-            .json(&request_body)
+            .body(body_bytes)
             .send()
             .await?;
 
@@ -290,6 +314,7 @@ impl KmsClient {
         credentials: &[CredentialSpec],
     ) -> Result<HashMap<String, SecretPayload>, KmsError> {
         let request_id = uuid::Uuid::new_v4().to_string();
+        let nonce = uuid::Uuid::new_v4().to_string();
         let started_at = std::time::Instant::now();
 
         let request_body = BatchCredentialRequest {
@@ -297,23 +322,36 @@ impl KmsClient {
             ttl_seconds: self.default_ttl_secs,
         };
 
+        let body_bytes = serde_json::to_vec(&request_body)?;
+        let body_sha256 = hex::encode(Sha256::digest(&body_bytes));
+
         let timestamp = OffsetDateTime::now_utc().unix_timestamp().to_string();
-        let signature =
-            build_hmac_header(&self.hmac_key, "POST", &self.batch_secrets_path, &timestamp)?;
+        let signature = build_hmac_header(
+            &self.hmac_key,
+            "POST",
+            &self.batch_secrets_path,
+            &timestamp,
+            &nonce,
+            &body_sha256,
+        )?;
 
         tracing::debug!(
             "[AGENT 2.1] Budowanie żądania batch bootstrap do KMS\n\
-             ├─ request_id:   {}\n\
-             ├─ url:          {}\n\
-             ├─ count:        {}\n\
-             ├─ x-service-id: {}\n\
-             ├─ x-timestamp:  {}\n\
-             ├─ x-signature:  {}",
+             ├─ request_id:     {}\n\
+             ├─ url:            {}\n\
+             ├─ count:          {}\n\
+             ├─ x-service-id:   {}\n\
+             ├─ x-timestamp:    {}\n\
+             ├─ x-nonce:        {}\n\
+             ├─ x-body-sha256:  {}\n\
+             ├─ x-signature:    {}",
             request_id,
             self.batch_secrets_url,
             credentials.len(),
             self.client_id,
             timestamp,
+            nonce,
+            body_sha256,
             signature,
         );
 
@@ -332,9 +370,11 @@ impl KmsClient {
             .header("X-Service-ID", &self.client_id)
             .header("X-Service-Name", &self.client_id)
             .header("X-Timestamp", &timestamp)
+            .header("X-Nonce", &nonce)
+            .header("X-Body-SHA256", &body_sha256)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
-            .json(&request_body)
+            .body(body_bytes)
             .send()
             .await?;
 
