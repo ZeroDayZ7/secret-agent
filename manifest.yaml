@@ -6,9 +6,9 @@ credentials:
     type: "postgres"
     resource: "postgres_auth"
 
-  # - name: "redis"
-  #   type: "redis"
-  #   resource: "cache_cluster"
+  - name: "redis"
+    type: "redis"
+    resource: "cache_redis"
 
   # - name: "rabbitmq"
   #   type: "amqp"
