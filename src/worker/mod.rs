@@ -8,6 +8,7 @@ use crate::config::AgentConfig;
 use crate::kms::KmsClient;
 use crate::manifest::ServiceManifest;
 use crate::state::{AgentState, AgentStateMachine};
+use std::collections::HashMap;
 
 const REFRESH_CONCURRENCY: usize = 4;
 
@@ -25,26 +26,32 @@ pub async fn run_renewal_loop(
     // -------------------------------------------------------------------------
     // 1. FAZA BOOTSTRAPU (Wykonuje się tylko RAZ przy starcie)
     // -------------------------------------------------------------------------
+    // Track per-credential bootstrap status so we don't re-request already fetched secrets
+    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    enum CredentialStatus {
+        Pending,
+        Fetched,
+        Failed,
+    }
+
+    let mut statuses: HashMap<String, CredentialStatus> = manifest
+        .credentials
+        .iter()
+        .map(|c| (c.name.clone(), CredentialStatus::Pending))
+        .collect();
 
     loop {
-        tracing::info!(
-            items_count = manifest.credentials.len(),
-            "📦 Pobieram pełny zestaw poświadczeń z KMS (Batch Bootstrap)..."
-        );
-        match kms_client
-            .fetch_batch_bootstrap(&manifest.credentials)
-            .await
-        {
-            Ok(secrets) if !secrets.is_empty() => {
+        tracing::info!(items_count = manifest.credentials.len(), "📦 Pobieram pełny zestaw poświadczeń z KMS (Batch Bootstrap)...");
+
+        // First try batch request (fast path)
+        match kms_client.fetch_batch_bootstrap(&manifest.credentials).await {
+            Ok(secrets) if !secrets.is_empty() && secrets.len() == manifest.credentials.len() => {
+                // Got all secrets in batch — success
                 let count = secrets.len();
                 cache.update_all(secrets);
                 cache.purge_expired();
 
-                tracing::info!(
-                    loaded_secrets = count,
-                    expected = manifest.credentials.len(),
-                    "✅ Wszystkie poświadczenia zostały pomyślnie załadowane do cache",
-                );
+                tracing::info!(loaded_secrets = count, expected = manifest.credentials.len(), "✅ Wszystkie poświadczenia zostały pomyślnie załadowane do cache");
 
                 if let Err(err) = state.transition(AgentState::Ready) {
                     tracing::error!(error = %err, "❌ Nie udało się przejść do stanu Ready");
@@ -52,19 +59,53 @@ pub async fn run_renewal_loop(
                     tracing::info!("🟢 Agent gotowy – obsługa gniazda UDS aktywna");
                 }
 
-                break; // Sukces bootstrapu – wyjście z pętli inicjalizacyjnej
+                break;
             }
-            Ok(_) => {
-                tracing::warn!("⚠️ KMS zwrócił pustą listę sekretów dla manifestu");
+            Ok(secrets) => {
+                // Partial success: update statuses for fetched items
+                tracing::warn!(loaded = secrets.len(), expected = manifest.credentials.len(), "⚠️ Otrzymano częściowy wynik batchowy z KMS");
+                for (k, v) in secrets.into_iter() {
+                    tracing::info!(credential = %k, "📥 Zaktualizowano pojedynczy sekret z częściowego wyniku batchowego");
+                    cache.update_single(k.clone(), v);
+                    statuses.insert(k, CredentialStatus::Fetched);
+                }
+                cache.purge_expired();
                 state.set(AgentState::Degraded);
             }
             Err(err) => {
-                tracing::warn!(
-                    error = %err,
-                    retry_in_ms = backoff.as_millis(),
-                    "❌ Błąd pobierania pakietu startowego z KMS. Ponawiam próbę z backoffem..."
-                );
+                tracing::warn!(error = %err, "❌ Błąd batchowego pobierania od KMS — spróbuję pobrać pozycje indywidualnie");
                 state.set(AgentState::Degraded);
+
+                // Try fetching missing items individually
+                for credential in &manifest.credentials {
+                    let name = credential.name.clone();
+                    if statuses.get(&name) == Some(&CredentialStatus::Fetched) {
+                        continue; // already fetched
+                    }
+
+                    match kms_client.fetch_single_secret(credential).await {
+                        Ok(secret) => {
+                            tracing::info!(credential = %name, "[Bootstrap] Pobrano pojedynczy sekret");
+                            cache.update_single(name.clone(), secret);
+                            statuses.insert(name.clone(), CredentialStatus::Fetched);
+                        }
+                        Err(e) => {
+                            tracing::warn!(credential = %name, error = %e, "[Bootstrap] Nie udało się pobrać pojedynczego sekretu — oznaczam jako Failed");
+                            statuses.insert(name.clone(), CredentialStatus::Failed);
+                        }
+                    }
+                }
+
+                // If all items fetched -> success
+                if statuses.values().all(|s| *s == CredentialStatus::Fetched) {
+                    tracing::info!(loaded = statuses.len(), "✅ Wszystkie poświadczenia pobrane indywidualnie — kończę bootstrap");
+                    if let Err(err) = state.transition(AgentState::Ready) {
+                        tracing::error!(error = %err, "❌ Nie udało się przejść do stanu Ready");
+                    } else {
+                        tracing::info!("🟢 Agent gotowy – obsługa gniazda UDS aktywna");
+                    }
+                    break;
+                }
             }
         }
 
