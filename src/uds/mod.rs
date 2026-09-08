@@ -165,6 +165,21 @@ async fn send_frame(stream: &mut tokio::net::UnixStream, payload: &[u8]) -> std:
 
     let len = payload.len() as u32;
     let len_bytes = len.to_be_bytes();
+
+    // ======================== TUTAJ DODAJ LOG ========================
+    // Próbujemy zdekodować MessagePack, żeby zobaczyć co dokładnie dostanie Go
+    let payload_debug = match rmp_serde::from_slice::<rmpv::Value>(payload) {
+        Ok(msgpack_val) => format!("{:?}", msgpack_val),
+        Err(_) => format!("HEX: {}", hex::encode(payload)),
+    };
+
+    tracing::info!(
+        frame_len = len,
+        payload_decoded = %payload_debug,
+        "[DBG UDS OUT] Wysyłam ramkę danych do klienta Go"
+    );
+    // =================================================================
+
     stream.write_all(&len_bytes).await?;
     if !payload.is_empty() {
         stream.write_all(payload).await?;

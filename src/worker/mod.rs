@@ -41,17 +41,27 @@ pub async fn run_renewal_loop(
         .collect();
 
     loop {
-        tracing::info!(items_count = manifest.credentials.len(), "📦 Pobieram pełny zestaw poświadczeń z KMS (Batch Bootstrap)...");
+        tracing::info!(
+            items_count = manifest.credentials.len(),
+            "📦 Pobieram pełny zestaw poświadczeń z KMS (Batch Bootstrap)..."
+        );
 
         // First try batch request (fast path)
-        match kms_client.fetch_batch_bootstrap(&manifest.credentials).await {
+        match kms_client
+            .fetch_batch_bootstrap(&manifest.credentials)
+            .await
+        {
             Ok(secrets) if !secrets.is_empty() && secrets.len() == manifest.credentials.len() => {
                 // Got all secrets in batch — success
                 let count = secrets.len();
                 cache.update_all(secrets);
                 cache.purge_expired();
 
-                tracing::info!(loaded_secrets = count, expected = manifest.credentials.len(), "✅ Wszystkie poświadczenia zostały pomyślnie załadowane do cache");
+                tracing::info!(
+                    loaded_secrets = count,
+                    expected = manifest.credentials.len(),
+                    "✅ Wszystkie poświadczenia zostały pomyślnie załadowane do cache"
+                );
 
                 if let Err(err) = state.transition(AgentState::Ready) {
                     tracing::error!(error = %err, "❌ Nie udało się przejść do stanu Ready");
@@ -63,7 +73,11 @@ pub async fn run_renewal_loop(
             }
             Ok(secrets) => {
                 // Partial success: update statuses for fetched items
-                tracing::warn!(loaded = secrets.len(), expected = manifest.credentials.len(), "⚠️ Otrzymano częściowy wynik batchowy z KMS");
+                tracing::warn!(
+                    loaded = secrets.len(),
+                    expected = manifest.credentials.len(),
+                    "⚠️ Otrzymano częściowy wynik batchowy z KMS"
+                );
                 for (k, v) in secrets.into_iter() {
                     tracing::info!(credential = %k, "📥 Zaktualizowano pojedynczy sekret z częściowego wyniku batchowego");
                     cache.update_single(k.clone(), v);
@@ -98,7 +112,10 @@ pub async fn run_renewal_loop(
 
                 // If all items fetched -> success
                 if statuses.values().all(|s| *s == CredentialStatus::Fetched) {
-                    tracing::info!(loaded = statuses.len(), "✅ Wszystkie poświadczenia pobrane indywidualnie — kończę bootstrap");
+                    tracing::info!(
+                        loaded = statuses.len(),
+                        "✅ Wszystkie poświadczenia pobrane indywidualnie — kończę bootstrap"
+                    );
                     if let Err(err) = state.transition(AgentState::Ready) {
                         tracing::error!(error = %err, "❌ Nie udało się przejść do stanu Ready");
                     } else {

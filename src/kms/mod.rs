@@ -395,6 +395,19 @@ impl KmsClient {
         }
 
         let parsed: BatchCredentialResponse = response.json().await?;
+
+        // ======================== TUTAJ DODAJ LOG ========================
+        for (k, v) in &parsed.credentials {
+            tracing::info!(
+                key = %k,
+                credential_id = %v.credential_id,
+                username = %v.username,
+                password_raw = %v.password.as_str(), // Zobaczysz czy przyszedł zwykły tekst czy np. Base64!
+                "[DBG KMS IN] Pobrano sekret z KMS"
+            );
+        }
+        // =================================================================
+
         let expires_at =
             Some(Instant::now() + std::time::Duration::from_secs(self.default_ttl_secs));
         let mut map = HashMap::new();
